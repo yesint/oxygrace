@@ -1,8 +1,13 @@
 //! Dataset drawing. Milestone 1 draws the connecting line of XY-like sets;
 //! symbols, fills and error bars are added in later milestones.
 
-use crate::model::{FillType, Graph, LineType, Set, SymbolType};
+use crate::model::{FillType, GraphType, Graph, LineType, Set, SetType, SymbolType};
 use crate::render::{Canvas, VPoint, WorldTransform};
+
+/// True for bar dataset types.
+fn is_bar(t: SetType) -> bool {
+    matches!(t, SetType::Bar | SetType::BarDy | SetType::BarDyDy)
+}
 
 /// 1/sqrt(3), used for equilateral-triangle symbol vertices (matches Grace).
 const SQRT1_3: f64 = 0.577_350_269_189_625_8;
@@ -12,14 +17,116 @@ const SQRT1_2: f64 = std::f64::consts::FRAC_1_SQRT_2;
 /// Draw every visible set of a graph: connecting line, then symbols.
 pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
     let wt = WorldTransform::new(graph);
+    // Bars are drawn first (as a grouped pass) so lines/symbols sit on top.
+    draw_bars(canvas, &wt, graph);
+
     for set in &graph.sets {
         if set.hidden {
             continue;
         }
         // Fill is drawn under the line, then symbols on top (Grace order).
         draw_set_fill(canvas, &wt, graph, set);
-        draw_set_line(canvas, &wt, set);
+        if !is_bar(set.set_type) {
+            draw_set_line(canvas, &wt, set);
+        }
         draw_set_symbols(canvas, &wt, set);
+    }
+}
+
+/// Draw all bar sets of a graph, grouping side-by-side in chart graphs.
+fn draw_bars(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph) {
+    let bars: Vec<&Set> = graph
+        .sets
+        .iter()
+        .filter(|s| !s.hidden && is_bar(s.set_type) && !s.data.is_empty())
+        .collect();
+    if bars.is_empty() {
+        return;
+    }
+    let is_chart = graph.graph_type == GraphType::Chart;
+    let stacked = is_chart && graph.stacked;
+
+    if stacked {
+        // Cumulative baseline per category, growing as sets are stacked.
+        let cats = bars.iter().map(|s| s.data.len()).max().unwrap_or(0);
+        let mut accum = vec![0.0f64; cats];
+        for set in &bars {
+            draw_one_bar_set(canvas, wt, set, 0.0, BarBase::Stack(&mut accum));
+        }
+        return;
+    }
+
+    // Side-by-side grouping: offset so the cluster is centered on each category.
+    let mut offset = 0.0;
+    if is_chart {
+        for s in &bars {
+            offset -= 0.5 * 0.02 * s.symbol_size;
+        }
+        offset -= 0.5 * (bars.len().saturating_sub(1)) as f64 * graph.bargap;
+    }
+    for set in &bars {
+        if is_chart {
+            offset += 0.5 * 0.02 * set.symbol_size;
+        }
+        let n = set.data.len();
+        let ybase = baseline_value(graph, set, set.data.y().unwrap_or(&[]), n);
+        draw_one_bar_set(canvas, wt, set, offset, BarBase::Fixed(ybase));
+        if is_chart {
+            offset += 0.5 * 0.02 * set.symbol_size + graph.bargap;
+        }
+    }
+}
+
+/// How a bar set's lower edge is determined.
+enum BarBase<'a> {
+    /// Fixed baseline Y for all bars.
+    Fixed(f64),
+    /// Per-category cumulative totals; advanced as bars stack.
+    Stack(&'a mut Vec<f64>),
+}
+
+/// Draw the bars of a single set with a horizontal view `offset`.
+fn draw_one_bar_set(canvas: &mut Canvas, wt: &WorldTransform, set: &Set, offset: f64, mut base: BarBase) {
+    let (Some(xs), Some(ys)) = (set.data.x(), set.data.y()) else {
+        return;
+    };
+    let n = xs.len().min(ys.len());
+    let bw = 0.01 * set.symbol_size; // bar half-width in view units
+    let do_fill = set.symbol_fill.pattern != 0;
+    let do_outline = set.symbol_linestyle != 0;
+
+    for i in 0..n {
+        let (base_y, top_y) = match base {
+            BarBase::Fixed(b) => (b, ys[i]),
+            BarBase::Stack(ref mut acc) => {
+                let b = acc.get(i).copied().unwrap_or(0.0);
+                if let Some(slot) = acc.get_mut(i) {
+                    *slot = b + ys[i];
+                }
+                (b, b + ys[i])
+            }
+        };
+        let (Some((bx, by)), Some((tx, ty))) =
+            (wt.world_to_view(xs[i], base_y), wt.world_to_view(xs[i], top_y))
+        else {
+            continue;
+        };
+        let x1 = bx + offset - bw;
+        let x2 = tx + offset + bw;
+        let rect = [
+            VPoint { x: x1, y: by },
+            VPoint { x: x2, y: by },
+            VPoint { x: x2, y: ty },
+            VPoint { x: x1, y: ty },
+        ];
+        if do_fill {
+            canvas.fill_polygon(&rect, set.symbol_fill.color);
+        }
+        if do_outline {
+            let mut closed = rect.to_vec();
+            closed.push(rect[0]);
+            canvas.draw_polyline(&closed, set.symbol_pen.color, set.symbol_linewidth, set.symbol_linestyle);
+        }
     }
 }
 

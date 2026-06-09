@@ -172,6 +172,8 @@ pub enum Command {
     GraphOnOff { graph: usize, on: bool },
     GraphHidden { graph: usize, hidden: bool },
     GraphType { graph: usize, ty: GraphType },
+    GraphBargap { graph: usize, gap: f64 },
+    GraphStacked { graph: usize, on: bool },
     World(WorldSpec),
     View(ViewSpec),
     Default(DefaultProp),
@@ -290,6 +292,8 @@ peg::parser! {
             / kw("type") __ w:word() {
                 Command::GraphType { graph: g, ty: parse_graph_type(w) }
             }
+            / kw("bar") __ kw("hgap") __ n:num() { Command::GraphBargap { graph: g, gap: n } }
+            / kw("stacked") __ b:onoff() { Command::GraphStacked { graph: g, on: b } }
             / [_]* { Command::Unknown }
 
         rule world_cmd() -> Command

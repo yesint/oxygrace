@@ -377,6 +377,10 @@ pub struct Graph {
     pub yscale: ScaleType,
     pub xinvert: bool,
     pub yinvert: bool,
+    /// Stacked bar/chart flag.
+    pub stacked: bool,
+    /// Horizontal gap between bar groups in a chart (view units).
+    pub bargap: f64,
     pub world: World,
     pub view: View,
     /// Four axes: X, Y, AltX, AltY (indexed via [`AxisId::index`]).
@@ -400,6 +404,8 @@ impl Default for Graph {
             yscale: ScaleType::Normal,
             xinvert: false,
             yinvert: false,
+            stacked: false,
+            bargap: 0.0,
             world: World::default(),
             view: View::default(),
             axes: [

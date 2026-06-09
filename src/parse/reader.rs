@@ -136,6 +136,8 @@ fn apply(project: &mut Project, cur: &mut Cursor, cmd: Command) {
         Command::GraphOnOff { graph, on } => project.graph_mut(graph).hidden = !on,
         Command::GraphHidden { graph, hidden } => project.graph_mut(graph).hidden = hidden,
         Command::GraphType { graph, ty } => project.graph_mut(graph).graph_type = ty,
+        Command::GraphBargap { graph, gap } => project.graph_mut(graph).bargap = gap,
+        Command::GraphStacked { graph, on } => project.graph_mut(graph).stacked = on,
         Command::World(spec) => {
             let g = cur.current_graph;
             apply_world(project.graph_mut(g), spec);
