@@ -295,6 +295,7 @@ fn apply_set(set: &mut crate::model::Set, prop: SetProp) {
         }
         SetProp::FillColor(n) => set.fill_pen.color = n,
         SetProp::FillPattern(n) => set.fill_pen.pattern = n,
+        SetProp::BaselineType(n) => set.baseline_type = n,
         SetProp::Legend(s) => set.legend = s,
         SetProp::Comment(s) => set.comment = s,
         SetProp::Ignored => {}

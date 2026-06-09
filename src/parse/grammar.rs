@@ -111,6 +111,7 @@ pub enum SetProp {
     FillType(i32),
     FillColor(i32),
     FillPattern(i32),
+    BaselineType(i32),
     Legend(String),
     Comment(String),
     Ignored,
@@ -398,6 +399,7 @@ peg::parser! {
             / kw("symbol") __ p:set_symbol() { p }
             / kw("line") __ p:set_line() { p }
             / kw("fill") __ p:set_fill() { p }
+            / kw("baseline") __ kw("type") __ n:iflex() { SetProp::BaselineType(n) }
             / kw("legend") __ s:qstring() { SetProp::Legend(s) }
             / kw("comment") __ s:qstring() { SetProp::Comment(s) }
             / kw("color") __ n:iflex() { SetProp::Color(n) }

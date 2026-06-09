@@ -307,6 +307,8 @@ pub struct Set {
 
     pub fill_type: FillType,
     pub fill_pen: Pen,
+    /// Baseline reference for baseline fills (0 = y=0, see Grace `setybase`).
+    pub baseline_type: i32,
 }
 
 impl Set {
@@ -335,6 +337,7 @@ impl Set {
             linewidth: d.linewidth,
             fill_type: FillType::None,
             fill_pen: pen,
+            baseline_type: 0,
         }
     }
 }

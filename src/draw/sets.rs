@@ -1,7 +1,7 @@
 //! Dataset drawing. Milestone 1 draws the connecting line of XY-like sets;
 //! symbols, fills and error bars are added in later milestones.
 
-use crate::model::{Graph, LineType, Set, SymbolType};
+use crate::model::{FillType, Graph, LineType, Set, SymbolType};
 use crate::render::{Canvas, VPoint, WorldTransform};
 
 /// 1/sqrt(3), used for equilateral-triangle symbol vertices (matches Grace).
@@ -16,8 +16,59 @@ pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
         if set.hidden {
             continue;
         }
+        // Fill is drawn under the line, then symbols on top (Grace order).
+        draw_set_fill(canvas, &wt, graph, set);
         draw_set_line(canvas, &wt, set);
         draw_set_symbols(canvas, &wt, set);
+    }
+}
+
+/// Fill the area of a set: the closed data polygon, or between the curve and a
+/// baseline. Drawn with the set's fill pen.
+fn draw_set_fill(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &Set) {
+    if set.fill_type == FillType::None || set.fill_pen.pattern == 0 {
+        return;
+    }
+    let (Some(xs), Some(ys)) = (set.data.x(), set.data.y()) else {
+        return;
+    };
+    let n = xs.len().min(ys.len());
+    if n < 2 {
+        return;
+    }
+    let mut pts: Vec<VPoint> = Vec::with_capacity(n + 2);
+    for i in 0..n {
+        if let Some((vx, vy)) = wt.world_to_view(xs[i], ys[i]) {
+            pts.push(VPoint { x: vx, y: vy });
+        }
+    }
+    if pts.len() < 2 {
+        return;
+    }
+    if set.fill_type == FillType::Baseline {
+        // Close the polygon back along the baseline y between the x extents.
+        let ybase = baseline_value(graph, set, ys, n);
+        let (x_first, x_last) = (xs[0], xs[n - 1]);
+        if let (Some((vxl, vyb)), Some((vxr, _))) =
+            (wt.world_to_view(x_last, ybase), wt.world_to_view(x_first, ybase))
+        {
+            pts.push(VPoint { x: vxl, y: vyb });
+            let vyb2 = wt.y_to_view(ybase).unwrap_or(vyb);
+            pts.push(VPoint { x: vxr, y: vyb2 });
+        }
+    }
+    canvas.fill_polygon(&pts, set.fill_pen.color);
+}
+
+/// Baseline Y value for baseline fills (Grace `setybase`).
+fn baseline_value(graph: &Graph, set: &Set, ys: &[f64], n: usize) -> f64 {
+    match set.baseline_type {
+        1 => ys[..n].iter().copied().fold(f64::INFINITY, f64::min), // SMIN
+        2 => ys[..n].iter().copied().fold(f64::NEG_INFINITY, f64::max), // SMAX
+        3 => graph.world.ymin,                                      // GMIN
+        4 => graph.world.ymax,                                      // GMAX
+        5 => ys[..n].iter().sum::<f64>() / n as f64,                // SAVG
+        _ => 0.0,                                                   // TYPE_0
     }
 }
 
