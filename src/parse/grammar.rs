@@ -1,0 +1,490 @@
+//! PEG grammar for the Grace `@`-command language.
+//!
+//! Each input line (with the leading `@` already removed) parses into one
+//! [`Command`]. The [`reader`](crate::parse::reader) then applies commands to
+//! the model using a small parse-state cursor (current graph / set / axis).
+//!
+//! The grammar covers the milestone-1 command subset and is deliberately
+//! tolerant: any line it does not recognize parses as [`Command::Unknown`]
+//! rather than failing, so real-world `.agr` files load without aborting.
+//!
+//! Keywords are matched case-insensitively (Grace treats `@WITH` and `@with`
+//! identically); quoted strings preserve their case.
+
+use crate::model::{AxisId, GraphType, ScaleType, SetType, TickFormat};
+
+/// Which world/view bound a component-form command sets.
+#[derive(Debug, Clone, Copy)]
+pub enum Bound {
+    Xmin,
+    Xmax,
+    Ymin,
+    Ymax,
+}
+
+/// A `@world` command: full 4-tuple or a single component.
+#[derive(Debug, Clone, Copy)]
+pub enum WorldSpec {
+    Full(f64, f64, f64, f64),
+    Component(Bound, f64),
+}
+
+/// A `@view` command: full 4-tuple or a single component.
+#[derive(Debug, Clone, Copy)]
+pub enum ViewSpec {
+    Full(f64, f64, f64, f64),
+    Component(Bound, f64),
+}
+
+/// A `@default ...` property.
+#[derive(Debug, Clone, Copy)]
+pub enum DefaultProp {
+    Linestyle(i32),
+    Linewidth(f64),
+    Color(i32),
+    Pattern(i32),
+    CharSize(f64),
+    Font(i32),
+    SymbolSize(f64),
+}
+
+/// A property of one tick level (major/minor) within an axis command.
+#[derive(Debug, Clone, Copy)]
+pub enum TickLevelProp {
+    Spacing(f64), // major only
+    Size(f64),
+    Color(i32),
+    Linewidth(f64),
+    Linestyle(i32),
+    Grid(bool),
+}
+
+/// A property set by an `@<axis> ...` command.
+#[derive(Debug, Clone)]
+pub enum AxisProp {
+    Active(bool),
+    BarActive(bool),
+    BarColor(i32),
+    BarLinestyle(i32),
+    BarLinewidth(f64),
+    LabelText(String),
+    LabelFont(i32),
+    LabelColor(i32),
+    LabelCharSize(f64),
+    TicksActive(bool),
+    TicksDir(bool), // true = in
+    MinorTicks(i32),
+    AutoNum(i32),
+    Major(TickLevelProp),
+    Minor(TickLevelProp),
+    TlActive(bool),
+    TlPrec(i32),
+    TlFormat(TickFormat),
+    TlFont(i32),
+    TlColor(i32),
+    TlCharSize(f64),
+    TlAngle(i32),
+    TlAppend(String),
+    TlPrepend(String),
+    Ignored,
+}
+
+/// A property set by an `@s<n> ...` command.
+#[derive(Debug, Clone)]
+pub enum SetProp {
+    Type(SetType),
+    Hidden(bool),
+    Symbol(i32),
+    SymbolSize(f64),
+    SymbolColor(i32),
+    SymbolFillColor(i32),
+    SymbolFillPattern(i32),
+    SymbolLinewidth(f64),
+    SymbolLinestyle(i32),
+    LineType(i32),
+    LineColor(i32),
+    LineLinewidth(f64),
+    LineLinestyle(i32),
+    Color(i32),      // legacy 4.x form
+    Linewidth(f64),  // legacy
+    Linestyle(i32),  // legacy
+    FillType(i32),
+    FillColor(i32),
+    FillPattern(i32),
+    Legend(String),
+    Comment(String),
+    Ignored,
+}
+
+/// A property set by an `@frame ...` command.
+#[derive(Debug, Clone, Copy)]
+pub enum FrameProp {
+    Type(i32),
+    Linestyle(i32),
+    Linewidth(f64),
+    Color(i32),
+    Pattern(i32),
+    BackgroundColor(i32),
+    BackgroundPattern(i32),
+}
+
+/// A property set by `@title`/`@subtitle`.
+#[derive(Debug, Clone)]
+pub enum TextProp {
+    Text(String),
+    Font(i32),
+    Size(f64),
+    Color(i32),
+}
+
+/// A property set by `@legend ...`.
+#[derive(Debug, Clone, Copy)]
+pub enum LegendProp {
+    Active(bool),
+    LoctypeView(bool),
+    Position(f64, f64),
+    Font(i32),
+    Color(i32),
+    CharSize(f64),
+    Ignored,
+}
+
+/// One parsed command from a `.agr` line.
+#[derive(Debug, Clone)]
+pub enum Command {
+    Version(i32),
+    With { graph: usize, set: Option<usize> },
+    Target { graph: usize, set: usize },
+    TypeDecl(SetType),
+    GraphOnOff { graph: usize, on: bool },
+    GraphHidden { graph: usize, hidden: bool },
+    GraphType { graph: usize, ty: GraphType },
+    World(WorldSpec),
+    View(ViewSpec),
+    Default(DefaultProp),
+    Axis { axis: AxisId, prop: AxisProp },
+    AxesScale { x: bool, scale: ScaleType },
+    AxesInvert { x: bool, on: bool },
+    Set { set: usize, prop: SetProp },
+    Frame(FrameProp),
+    Title(TextProp),
+    Subtitle(TextProp),
+    Legend(LegendProp),
+    MapColor { index: i32, rgb: (u8, u8, u8) },
+    /// A recognized-but-ignored or unrecognized command.
+    Unknown,
+}
+
+peg::parser! {
+    /// Grammar over a single de-`@`-ed command line.
+    pub grammar agr() for str {
+        rule _() = quiet!{ [' ' | '\t']* }
+        rule __() = quiet!{ [' ' | '\t']+ }
+        rule comma() = _ "," _
+
+        /// A run of ASCII letters compared case-insensitively to `k`.
+        rule kw(k: &'static str) = w:$(['a'..='z' | 'A'..='Z']+) {?
+            if w.eq_ignore_ascii_case(k) { Ok(()) } else { Err(k) }
+        }
+
+        rule digits() -> &'input str = $(['0'..='9']+)
+
+        rule uint() -> usize = n:digits() {? n.parse().or(Err("uint")) }
+
+        rule int() -> i32 = n:$("-"? ['0'..='9']+) {? n.parse().or(Err("int")) }
+
+        rule num() -> f64 = n:$("-"? ['0'..='9']* ("." ['0'..='9']*)? (['e' | 'E'] ['+' | '-']? ['0'..='9']+)?) {?
+            n.trim().parse::<f64>().or(Err("num"))
+        }
+
+        /// An integer that may be written with a fractional part (e.g. "1.000000").
+        rule iflex() -> i32 = v:num() { v.round() as i32 }
+
+        rule onoff() -> bool
+            = kw("on") { true }
+            / kw("true") { true }
+            / kw("off") { false }
+            / kw("false") { false }
+            / "1" { true }
+            / "0" { false }
+
+        rule qstring() -> String = "\"" s:$([^ '"']*) "\"" { s.to_string() }
+        rule word() -> &'input str = $(['a'..='z' | 'A'..='Z']+)
+
+        /// `g0` / `G3` graph selector -> index.
+        rule gsel() -> usize = ['g' | 'G'] n:uint() { n }
+        /// `s0` / `S2` set selector -> index.
+        rule ssel() -> usize = ['s' | 'S'] n:uint() { n }
+
+        /// Entry point: parse a whole command line.
+        pub rule command() -> Command
+            = _ c:cmd() _ ![_] { c }
+            / _ [_]* { Command::Unknown }
+
+        rule cmd() -> Command
+            = version()
+            / with()
+            / target()
+            / type_decl()
+            / graph_prefixed()
+            / world_cmd()
+            / view_cmd()
+            / default_cmd()
+            / axes_cmd()
+            / axis_cmd()
+            / set_cmd()
+            / frame_cmd()
+            / title_cmd()
+            / subtitle_cmd()
+            / legend_cmd()
+            / map_color()
+
+        rule version() -> Command = kw("version") __ n:int() { Command::Version(n) }
+
+        rule with() -> Command
+            = kw("with") __ g:gsel() s:("." ['s'|'S'] n:uint() { n })? {
+                Command::With { graph: g, set: s }
+            }
+
+        rule target() -> Command
+            = kw("target") __ g:gsel() "." s:ssel() {
+                Command::Target { graph: g, set: s }
+            }
+
+        rule type_decl() -> Command
+            = kw("type") __ w:word() {
+                match SetType::parse(w) {
+                    Some(t) => Command::TypeDecl(t),
+                    None => Command::Unknown,
+                }
+            }
+
+        /// `g0 on`, `g0 hidden false`, `g0 type xy`.
+        rule graph_prefixed() -> Command
+            = g:gsel() __ p:graph_prop(g) { p }
+
+        rule graph_prop(g: usize) -> Command
+            = b:onoff() { Command::GraphOnOff { graph: g, on: b } }
+            / kw("hidden") __ b:onoff() { Command::GraphHidden { graph: g, hidden: b } }
+            / kw("type") __ w:word() {
+                Command::GraphType { graph: g, ty: parse_graph_type(w) }
+            }
+            / [_]* { Command::Unknown }
+
+        rule world_cmd() -> Command
+            = kw("world") __ s:world_spec() { Command::World(s) }
+        rule world_spec() -> WorldSpec
+            = b:bound() __ v:num() { WorldSpec::Component(b, v) }
+            / a:num() comma() b:num() comma() c:num() comma() d:num() { WorldSpec::Full(a, b, c, d) }
+
+        rule view_cmd() -> Command
+            = kw("view") __ s:view_spec() { Command::View(s) }
+        rule view_spec() -> ViewSpec
+            = b:bound() __ v:num() { ViewSpec::Component(b, v) }
+            / a:num() comma() b:num() comma() c:num() comma() d:num() { ViewSpec::Full(a, b, c, d) }
+
+        rule bound() -> Bound
+            = kw("xmin") { Bound::Xmin }
+            / kw("xmax") { Bound::Xmax }
+            / kw("ymin") { Bound::Ymin }
+            / kw("ymax") { Bound::Ymax }
+
+        rule default_cmd() -> Command
+            = kw("default") __ p:default_prop() { Command::Default(p) }
+        rule default_prop() -> DefaultProp
+            = kw("linestyle") __ n:iflex() { DefaultProp::Linestyle(n) }
+            / kw("linewidth") __ n:num() { DefaultProp::Linewidth(n) }
+            / kw("color") __ n:iflex() { DefaultProp::Color(n) }
+            / kw("pattern") __ n:iflex() { DefaultProp::Pattern(n) }
+            / kw("char") __ kw("size") __ n:num() { DefaultProp::CharSize(n) }
+            / kw("font") __ kw("source") __ [_]* { DefaultProp::Font(-1) } // ignored sentinel
+            / kw("font") __ n:iflex() { DefaultProp::Font(n) }
+            / kw("symbol") __ kw("size") __ n:num() { DefaultProp::SymbolSize(n) }
+            / kw("sformat") __ [_]* { DefaultProp::Font(-1) }
+
+        /// `xaxes scale Logarithmic`, `yaxes invert on`.
+        rule axes_cmd() -> Command
+            = x:axes_sel() __ kw("scale") __ w:word() {
+                Command::AxesScale { x, scale: parse_scale(w) }
+            }
+            / x:axes_sel() __ kw("invert") __ b:onoff() {
+                Command::AxesInvert { x, on: b }
+            }
+        rule axes_sel() -> bool
+            = kw("xaxes") { true }
+            / kw("yaxes") { false }
+
+        rule axis_cmd() -> Command
+            = a:axis_sel() __ p:axis_prop() { Command::Axis { axis: a, prop: p } }
+        rule axis_sel() -> AxisId
+            = kw("altxaxis") { AxisId::AltX }
+            / kw("altyaxis") { AxisId::AltY }
+            / kw("xaxis") { AxisId::X }
+            / kw("yaxis") { AxisId::Y }
+
+        rule axis_prop() -> AxisProp
+            = b:onoff() { AxisProp::Active(b) }
+            / kw("bar") __ p:axis_bar() { p }
+            / kw("label") __ p:axis_label() { p }
+            / kw("tick") __ p:axis_tick() { p }
+            / kw("ticklabel") __ p:axis_ticklabel() { p }
+            / [_]* { AxisProp::Ignored }
+
+        rule axis_bar() -> AxisProp
+            = b:onoff() { AxisProp::BarActive(b) }
+            / kw("color") __ n:iflex() { AxisProp::BarColor(n) }
+            / kw("linestyle") __ n:iflex() { AxisProp::BarLinestyle(n) }
+            / kw("linewidth") __ n:num() { AxisProp::BarLinewidth(n) }
+            / [_]* { AxisProp::Ignored }
+
+        rule axis_label() -> AxisProp
+            = kw("char") __ kw("size") __ n:num() { AxisProp::LabelCharSize(n) }
+            / kw("font") __ n:iflex() { AxisProp::LabelFont(n) }
+            / kw("color") __ n:iflex() { AxisProp::LabelColor(n) }
+            / s:qstring() { AxisProp::LabelText(s) }
+            / [_]* { AxisProp::Ignored }
+
+        rule axis_tick() -> AxisProp
+            = b:onoff() { AxisProp::TicksActive(b) }
+            / kw("in") { AxisProp::TicksDir(true) }
+            / kw("out") { AxisProp::TicksDir(false) }
+            / kw("both") { AxisProp::Ignored }
+            / kw("major") __ p:tick_level(true) { AxisProp::Major(p) }
+            / kw("minor") __ kw("ticks") __ n:iflex() { AxisProp::MinorTicks(n) }
+            / kw("minor") __ p:tick_level(false) { AxisProp::Minor(p) }
+            / kw("default") __ n:iflex() { AxisProp::AutoNum(n) }
+            / [_]* { AxisProp::Ignored }
+
+        /// Major (`spacing` allowed) / minor tick level properties.
+        rule tick_level(allow_spacing: bool) -> TickLevelProp
+            = kw("size") __ n:num() { TickLevelProp::Size(n) }
+            / kw("color") __ n:iflex() { TickLevelProp::Color(n) }
+            / kw("linewidth") __ n:num() { TickLevelProp::Linewidth(n) }
+            / kw("linestyle") __ n:iflex() { TickLevelProp::Linestyle(n) }
+            / kw("grid") __ b:onoff() { TickLevelProp::Grid(b) }
+            / n:num() {? if allow_spacing { Ok(TickLevelProp::Spacing(n)) } else { Err("minor spacing") } }
+
+        rule axis_ticklabel() -> AxisProp
+            = b:onoff() { AxisProp::TlActive(b) }
+            / kw("prec") __ n:iflex() { AxisProp::TlPrec(n) }
+            / kw("format") __ w:word() {
+                AxisProp::TlFormat(TickFormat::parse(w).unwrap_or(TickFormat::Decimal))
+            }
+            / kw("char") __ kw("size") __ n:num() { AxisProp::TlCharSize(n) }
+            / kw("font") __ n:iflex() { AxisProp::TlFont(n) }
+            / kw("color") __ n:iflex() { AxisProp::TlColor(n) }
+            / kw("angle") __ n:iflex() { AxisProp::TlAngle(n) }
+            / kw("append") __ s:qstring() { AxisProp::TlAppend(s) }
+            / kw("prepend") __ s:qstring() { AxisProp::TlPrepend(s) }
+            / [_]* { AxisProp::Ignored }
+
+        rule set_cmd() -> Command
+            = s:ssel() __ p:set_prop() { Command::Set { set: s, prop: p } }
+        rule set_prop() -> SetProp
+            = kw("type") __ w:word() {
+                SetType::parse(w).map(SetProp::Type).unwrap_or(SetProp::Ignored)
+            }
+            / kw("hidden") __ b:onoff() { SetProp::Hidden(b) }
+            / kw("symbol") __ p:set_symbol() { p }
+            / kw("line") __ p:set_line() { p }
+            / kw("fill") __ p:set_fill() { p }
+            / kw("legend") __ s:qstring() { SetProp::Legend(s) }
+            / kw("comment") __ s:qstring() { SetProp::Comment(s) }
+            / kw("color") __ n:iflex() { SetProp::Color(n) }
+            / kw("linewidth") __ n:num() { SetProp::Linewidth(n) }
+            / kw("linestyle") __ n:iflex() { SetProp::Linestyle(n) }
+            / [_]* { SetProp::Ignored }
+
+        rule set_symbol() -> SetProp
+            = kw("size") __ n:num() { SetProp::SymbolSize(n) }
+            / kw("color") __ n:iflex() { SetProp::SymbolColor(n) }
+            / kw("fill") __ kw("color") __ n:iflex() { SetProp::SymbolFillColor(n) }
+            / kw("fill") __ kw("pattern") __ n:iflex() { SetProp::SymbolFillPattern(n) }
+            / kw("linewidth") __ n:num() { SetProp::SymbolLinewidth(n) }
+            / kw("linestyle") __ n:iflex() { SetProp::SymbolLinestyle(n) }
+            / n:iflex() { SetProp::Symbol(n) }
+            / [_]* { SetProp::Ignored }
+
+        rule set_line() -> SetProp
+            = kw("type") __ n:iflex() { SetProp::LineType(n) }
+            / kw("color") __ n:iflex() { SetProp::LineColor(n) }
+            / kw("linewidth") __ n:num() { SetProp::LineLinewidth(n) }
+            / kw("linestyle") __ n:iflex() { SetProp::LineLinestyle(n) }
+            / [_]* { SetProp::Ignored }
+
+        rule set_fill() -> SetProp
+            = kw("type") __ n:iflex() { SetProp::FillType(n) }
+            / kw("color") __ n:iflex() { SetProp::FillColor(n) }
+            / kw("pattern") __ n:iflex() { SetProp::FillPattern(n) }
+            / n:iflex() { SetProp::FillType(n) } // legacy "fill 1"
+            / [_]* { SetProp::Ignored }
+
+        rule frame_cmd() -> Command
+            = kw("frame") __ p:frame_prop() { Command::Frame(p) }
+        rule frame_prop() -> FrameProp
+            = kw("type") __ n:iflex() { FrameProp::Type(n) }
+            / kw("linestyle") __ n:iflex() { FrameProp::Linestyle(n) }
+            / kw("linewidth") __ n:num() { FrameProp::Linewidth(n) }
+            / kw("color") __ n:iflex() { FrameProp::Color(n) }
+            / kw("pattern") __ n:iflex() { FrameProp::Pattern(n) }
+            / kw("background") __ kw("color") __ n:iflex() { FrameProp::BackgroundColor(n) }
+            / kw("background") __ kw("pattern") __ n:iflex() { FrameProp::BackgroundPattern(n) }
+
+        rule title_cmd() -> Command
+            = kw("title") __ p:text_prop() { Command::Title(p) }
+        rule subtitle_cmd() -> Command
+            = kw("subtitle") __ p:text_prop() { Command::Subtitle(p) }
+        rule text_prop() -> TextProp
+            = kw("font") __ n:iflex() { TextProp::Font(n) }
+            / kw("size") __ n:num() { TextProp::Size(n) }
+            / kw("color") __ n:iflex() { TextProp::Color(n) }
+            / kw("linewidth") __ [_]* { TextProp::Color(-1) } // ignored
+            / s:qstring() { TextProp::Text(s) }
+
+        rule legend_cmd() -> Command
+            = kw("legend") __ p:legend_prop() { Command::Legend(p) }
+        rule legend_prop() -> LegendProp
+            = b:onoff() { LegendProp::Active(b) }
+            / kw("loctype") __ w:word() { LegendProp::LoctypeView(w.eq_ignore_ascii_case("view")) }
+            / kw("font") __ n:iflex() { LegendProp::Font(n) }
+            / kw("color") __ n:iflex() { LegendProp::Color(n) }
+            / kw("char") __ kw("size") __ n:num() { LegendProp::CharSize(n) }
+            / x:num() comma() y:num() { LegendProp::Position(x, y) }
+            / [_]* { LegendProp::Ignored }
+
+        rule map_color() -> Command
+            = kw("map") __ kw("color") __ idx:int() __ kw("to") __ "(" _ r:iflex() comma() g:iflex() comma() b:iflex() _ ")" rest:[_]* {
+                Command::MapColor { index: idx, rgb: (clamp_u8(r), clamp_u8(g), clamp_u8(b)) }
+            }
+    }
+}
+
+fn clamp_u8(v: i32) -> u8 {
+    v.clamp(0, 255) as u8
+}
+
+fn parse_graph_type(w: &str) -> GraphType {
+    match w.to_ascii_lowercase().as_str() {
+        "xy" => GraphType::Xy,
+        "chart" => GraphType::Chart,
+        "polar" => GraphType::Polar,
+        "smith" => GraphType::Smith,
+        "fixed" => GraphType::Fixed,
+        "pie" => GraphType::Pie,
+        _ => GraphType::Xy,
+    }
+}
+
+fn parse_scale(w: &str) -> ScaleType {
+    match w.to_ascii_lowercase().as_str() {
+        "logarithmic" => ScaleType::Logarithmic,
+        "reciprocal" => ScaleType::Reciprocal,
+        "logit" => ScaleType::Logit,
+        _ => ScaleType::Normal,
+    }
+}
+
+/// Parse one de-`@`-ed command line, never failing (falls back to `Unknown`).
+pub fn parse_line(line: &str) -> Command {
+    agr::command(line).unwrap_or(Command::Unknown)
+}
