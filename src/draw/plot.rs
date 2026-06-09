@@ -41,7 +41,7 @@ fn fill_frame(canvas: &mut Canvas, graph: &Graph) {
         VPoint { x: v.xmax, y: v.ymax },
         VPoint { x: v.xmin, y: v.ymax },
     ];
-    canvas.fill_polygon(&rect, graph.frame.fill_pen.color);
+    canvas.fill_polygon(&rect, graph.frame.fill_pen.color, graph.frame.fill_pen.pattern);
 }
 
 /// Draw the frame box around the plotting area (type 0 = closed rectangle).

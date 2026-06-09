@@ -120,7 +120,7 @@ fn draw_one_bar_set(canvas: &mut Canvas, wt: &WorldTransform, set: &Set, offset:
             VPoint { x: x1, y: ty },
         ];
         if do_fill {
-            canvas.fill_polygon(&rect, set.symbol_fill.color);
+            canvas.fill_polygon(&rect, set.symbol_fill.color, set.symbol_fill.pattern);
         }
         if do_outline {
             let mut closed = rect.to_vec();
@@ -169,7 +169,7 @@ fn draw_set_fill(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &
             pts.push(VPoint { x: vxr, y: vyb2 });
         }
     }
-    canvas.fill_polygon(&pts, set.fill_pen.color);
+    canvas.fill_polygon(&pts, set.fill_pen.color, set.fill_pen.pattern);
 }
 
 /// Baseline Y value for baseline fills (Grace `setybase`).
@@ -313,7 +313,7 @@ fn draw_one_symbol(canvas: &mut Canvas, set: &Set, c: VPoint, r: f64, fill: bool
 
     if let Some(pts) = poly {
         if fill {
-            canvas.fill_polygon(&pts, fc);
+            canvas.fill_polygon(&pts, fc, set.symbol_fill.pattern);
         }
         if outline {
             let mut closed = pts.clone();
@@ -326,7 +326,7 @@ fn draw_one_symbol(canvas: &mut Canvas, set: &Set, c: VPoint, r: f64, fill: bool
     match set.symbol {
         SymbolType::Circle => {
             if fill {
-                canvas.fill_circle(c, r, fc);
+                canvas.fill_circle(c, r, fc, set.symbol_fill.pattern);
             }
             if outline {
                 canvas.stroke_circle(c, r, oc, lw, ls);

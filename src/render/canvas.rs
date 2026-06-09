@@ -4,14 +4,41 @@
 //! color map here.
 
 use tiny_skia::{
-    FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, StrokeDash, Transform,
+    FillRule, FilterQuality, LineCap, LineJoin, Paint, Path, PathBuilder, Pattern, Pixmap,
+    SpreadMode, Stroke, StrokeDash, Transform,
 };
 
-use crate::color::{self};
+use crate::color::{self, Rgba};
 use crate::font::FontSet;
 use crate::model::Project;
+use crate::patterns::PATTERN_BITS;
 use crate::render::transform::PageTransform;
 use crate::text;
+
+/// Build a 16x16 RGBA tile for a Grace fill pattern in the given color.
+/// Set bits get the opaque color; unset bits are transparent.
+fn pattern_tile(pattern: i32, color: Rgba) -> Option<Pixmap> {
+    let idx = pattern as usize;
+    if !(0..PATTERN_BITS.len()).contains(&idx) {
+        return None;
+    }
+    let bits = &PATTERN_BITS[idx];
+    let mut tile = Pixmap::new(16, 16)?;
+    let px = tile.pixels_mut();
+    for row in 0..16 {
+        for col in 0..16 {
+            // LSB-first within each byte (X11 bitmap order).
+            let byte = bits[row * 2 + col / 8];
+            if (byte >> (col % 8)) & 1 == 1 {
+                // Premultiplied opaque color.
+                px[row * 16 + col] =
+                    tiny_skia::PremultipliedColorU8::from_rgba(color.r, color.g, color.b, 255)
+                        .unwrap();
+            }
+        }
+    }
+    Some(tile)
+}
 
 /// Horizontal text alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,8 +139,9 @@ impl<'a> Canvas<'a> {
             .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
     }
 
-    /// Fill a closed polygon given in view coordinates.
-    pub fn fill_polygon(&mut self, pts: &[VPoint], color: i32) {
+    /// Fill a closed polygon (view coords) with a color index and fill pattern.
+    /// Pattern 0 = no fill, 1 = solid, 2..=31 = a tiled hatch in `color`.
+    pub fn fill_polygon(&mut self, pts: &[VPoint], color: i32, pattern: i32) {
         if pts.len() < 3 {
             return;
         }
@@ -128,11 +156,42 @@ impl<'a> Canvas<'a> {
         }
         pb.close();
         let Some(path) = pb.finish() else { return };
-        let mut paint = Paint::default();
-        paint.set_color(color::resolve(self.project, color).to_skia());
-        paint.anti_alias = true;
+        self.fill_path_pen(&path, color, pattern);
+    }
+
+    /// Fill a path with a color index and fill pattern (shared by all fills).
+    fn fill_path_pen(&mut self, path: &Path, color: i32, pattern: i32) {
+        if pattern == 0 {
+            return;
+        }
+        let rgba = color::resolve(self.project, color);
+        let mut paint = Paint {
+            anti_alias: true,
+            ..Default::default()
+        };
+        if pattern == 1 {
+            paint.set_color(rgba.to_skia());
+            self.pixmap
+                .fill_path(path, &paint, FillRule::Winding, Transform::identity(), None);
+            return;
+        }
+        // Hatched pattern: tile a 16x16 stencil in the foreground color.
+        let Some(tile) = pattern_tile(pattern, rgba) else {
+            // Unknown pattern -> fall back to solid.
+            paint.set_color(rgba.to_skia());
+            self.pixmap
+                .fill_path(path, &paint, FillRule::Winding, Transform::identity(), None);
+            return;
+        };
+        paint.shader = Pattern::new(
+            tile.as_ref(),
+            SpreadMode::Repeat,
+            FilterQuality::Nearest,
+            1.0,
+            Transform::identity(),
+        );
         self.pixmap
-            .fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+            .fill_path(path, &paint, FillRule::Winding, Transform::identity(), None);
     }
 
     /// Width of a marked-up string in view units, at the given char size.
@@ -147,8 +206,8 @@ impl<'a> Canvas<'a> {
         charsize * crate::render::transform::MAGIC_FONT_SCALE
     }
 
-    /// Fill a circle (center + radius in view units) with a color index.
-    pub fn fill_circle(&mut self, center: VPoint, radius_view: f64, color: i32) {
+    /// Fill a circle (center + radius in view units) with a color and pattern.
+    pub fn fill_circle(&mut self, center: VPoint, radius_view: f64, color: i32, pattern: i32) {
         let (cx, cy) = self.page.view_to_device(center.x, center.y);
         let r = self.page.view_len_px(radius_view);
         if r <= 0.0 {
@@ -157,11 +216,7 @@ impl<'a> Canvas<'a> {
         let Some(path) = PathBuilder::from_circle(cx, cy, r) else {
             return;
         };
-        let mut paint = Paint::default();
-        paint.set_color(color::resolve(self.project, color).to_skia());
-        paint.anti_alias = true;
-        self.pixmap
-            .fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        self.fill_path_pen(&path, color, pattern);
     }
 
     /// Stroke a circle outline (center + radius in view units).

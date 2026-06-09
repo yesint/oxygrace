@@ -65,7 +65,7 @@ pub fn draw_legend(canvas: &mut Canvas, graph: &Graph) {
             VPoint { x: x1, y: y_top },
         ];
         if l.box_fill_pattern != 0 {
-            canvas.fill_polygon(&rect, l.box_fill_color);
+            canvas.fill_polygon(&rect, l.box_fill_color, l.box_fill_pattern);
         }
         if l.box_linestyle != 0 {
             let mut closed = rect.to_vec();
@@ -99,7 +99,7 @@ pub fn draw_legend(canvas: &mut Canvas, graph: &Graph) {
                 VPoint { x: ax + ldist / 2.0 + bw, y: y_mid - bw },
             ];
             if set.symbol_fill.pattern != 0 {
-                canvas.fill_polygon(&box_pts, set.symbol_fill.color);
+                canvas.fill_polygon(&box_pts, set.symbol_fill.color, set.symbol_fill.pattern);
             }
             let mut closed = box_pts.to_vec();
             closed.push(box_pts[0]);

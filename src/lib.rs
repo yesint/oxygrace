@@ -17,6 +17,7 @@ pub mod draw;
 pub mod font;
 pub mod model;
 pub mod parse;
+pub mod patterns;
 pub mod render;
 pub mod text;
 
