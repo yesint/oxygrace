@@ -26,10 +26,34 @@ pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
         }
         // Fill is drawn under the line, then symbols on top (Grace order).
         draw_set_fill(canvas, &wt, graph, set);
+        if set.dropline {
+            draw_droplines(canvas, &wt, graph, set);
+        }
         if !is_bar(set.set_type) {
             draw_set_line(canvas, &wt, set);
         }
-        draw_set_symbols(canvas, &wt, set);
+        draw_set_symbols(canvas, &wt, graph, set);
+    }
+}
+
+/// Draw vertical droplines from each point down to the set's baseline.
+fn draw_droplines(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &Set) {
+    let (Some(xs), Some(ys)) = (set.data.x(), set.data.y()) else {
+        return;
+    };
+    let n = xs.len().min(ys.len());
+    let ybase = baseline_value(graph, set, ys, n);
+    for i in 0..n {
+        if let (Some((vx, vyb)), Some((_, vyt))) =
+            (wt.world_to_view(xs[i], ybase), wt.world_to_view(xs[i], ys[i]))
+        {
+            canvas.draw_polyline(
+                &[VPoint { x: vx, y: vyb }, VPoint { x: vx, y: vyt }],
+                set.line_pen.color,
+                set.linewidth,
+                if set.linestyle == 0 { 1 } else { set.linestyle },
+            );
+        }
     }
 }
 
@@ -228,7 +252,7 @@ fn draw_set_line(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
 }
 
 /// Draw the plot symbol at each data point of a set.
-fn draw_set_symbols(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
+fn draw_set_symbols(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &Set) {
     if set.symbol == SymbolType::None {
         return;
     }
@@ -236,11 +260,12 @@ fn draw_set_symbols(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
         return;
     };
     let n = xs.len().min(ys.len());
-    // Symbol radius in view units (Grace: 0.01 * symsize).
-    let r = 0.01 * set.symbol_size;
-    if r <= 0.0 {
-        return;
-    }
+    // For xysize sets the third column scales the symbol size by 1/znorm.
+    let zcol = if set.set_type == SetType::XySize {
+        set.data.cols.get(2)
+    } else {
+        None
+    };
     let do_fill = set.symbol_fill.pattern != 0;
     let do_outline = set.symbol_linestyle != 0;
 
@@ -248,6 +273,14 @@ fn draw_set_symbols(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
         let Some((vx, vy)) = wt.world_to_view(xs[i], ys[i]) else {
             continue;
         };
+        // Symbol radius in view units (Grace: 0.01 * symsize).
+        let r = match zcol {
+            Some(z) if graph.znorm != 0.0 => 0.01 * (z.get(i).copied().unwrap_or(0.0) / graph.znorm),
+            _ => 0.01 * set.symbol_size,
+        };
+        if r <= 0.0 {
+            continue;
+        }
         let c = VPoint { x: vx, y: vy };
         draw_one_symbol(canvas, set, c, r, do_fill, do_outline);
     }

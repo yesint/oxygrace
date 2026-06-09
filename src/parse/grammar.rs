@@ -112,6 +112,7 @@ pub enum SetProp {
     FillColor(i32),
     FillPattern(i32),
     BaselineType(i32),
+    Dropline(bool),
     Legend(String),
     Comment(String),
     Ignored,
@@ -178,6 +179,7 @@ pub enum Command {
     GraphStacked { graph: usize, on: bool },
     World(WorldSpec),
     View(ViewSpec),
+    Znorm(f64),
     Default(DefaultProp),
     Axis { axis: AxisId, prop: AxisProp },
     AxesScale { x: bool, scale: ScaleType },
@@ -247,6 +249,7 @@ peg::parser! {
             / graph_prefixed()
             / world_cmd()
             / view_cmd()
+            / znorm_cmd()
             / default_cmd()
             / axes_cmd()
             / axis_cmd()
@@ -303,6 +306,8 @@ peg::parser! {
         rule world_spec() -> WorldSpec
             = b:bound() __ v:num() { WorldSpec::Component(b, v) }
             / a:num() comma() b:num() comma() c:num() comma() d:num() { WorldSpec::Full(a, b, c, d) }
+
+        rule znorm_cmd() -> Command = kw("znorm") __ n:num() { Command::Znorm(n) }
 
         rule view_cmd() -> Command
             = kw("view") __ s:view_spec() { Command::View(s) }
@@ -416,6 +421,7 @@ peg::parser! {
             / kw("line") __ p:set_line() { p }
             / kw("fill") __ p:set_fill() { p }
             / kw("baseline") __ kw("type") __ n:iflex() { SetProp::BaselineType(n) }
+            / kw("dropline") __ b:onoff() { SetProp::Dropline(b) }
             / kw("legend") __ s:qstring() { SetProp::Legend(s) }
             / kw("comment") __ s:qstring() { SetProp::Comment(s) }
             / kw("color") __ n:iflex() { SetProp::Color(n) }

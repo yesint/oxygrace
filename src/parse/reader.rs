@@ -144,6 +144,7 @@ fn apply(project: &mut Project, cur: &mut Cursor, cmd: Command) {
             cur.mark_world_set(g);
         }
         Command::View(spec) => apply_view(project.graph_mut(cur.current_graph), spec),
+        Command::Znorm(z) => project.graph_mut(cur.current_graph).znorm = z,
         Command::Default(p) => apply_default(&mut project.defaults, p),
         Command::Axis { axis, prop } => {
             let g = cur.current_graph;
@@ -304,6 +305,7 @@ fn apply_set(set: &mut crate::model::Set, prop: SetProp) {
         SetProp::FillColor(n) => set.fill_pen.color = n,
         SetProp::FillPattern(n) => set.fill_pen.pattern = n,
         SetProp::BaselineType(n) => set.baseline_type = n,
+        SetProp::Dropline(b) => set.dropline = b,
         SetProp::Legend(s) => set.legend = s,
         SetProp::Comment(s) => set.comment = s,
         SetProp::Ignored => {}

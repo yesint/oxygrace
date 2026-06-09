@@ -335,6 +335,8 @@ pub struct Set {
     pub fill_pen: Pen,
     /// Baseline reference for baseline fills (0 = y=0, see Grace `setybase`).
     pub baseline_type: i32,
+    /// Draw a vertical line from each point down to the baseline.
+    pub dropline: bool,
 }
 
 impl Set {
@@ -364,6 +366,7 @@ impl Set {
             fill_type: FillType::None,
             fill_pen: pen,
             baseline_type: 0,
+            dropline: false,
         }
     }
 }
@@ -381,6 +384,8 @@ pub struct Graph {
     pub stacked: bool,
     /// Horizontal gap between bar groups in a chart (view units).
     pub bargap: f64,
+    /// Normalization divisor for xysize symbol scaling (`@znorm`).
+    pub znorm: f64,
     pub world: World,
     pub view: View,
     /// Four axes: X, Y, AltX, AltY (indexed via [`AxisId::index`]).
@@ -406,6 +411,7 @@ impl Default for Graph {
             yinvert: false,
             stacked: false,
             bargap: 0.0,
+            znorm: 1.0,
             world: World::default(),
             view: View::default(),
             axes: [
