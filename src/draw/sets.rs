@@ -261,7 +261,13 @@ fn draw_set_symbols(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set
     };
     let n = xs.len().min(ys.len());
     // For xysize sets the third column scales the symbol size by 1/znorm.
-    let zcol = if set.set_type == SetType::XySize {
+    let zsize = if set.set_type == SetType::XySize {
+        set.data.cols.get(2)
+    } else {
+        None
+    };
+    // For xycolor sets the third column is a per-point fill color index.
+    let zcolor = if set.set_type == SetType::XyColor {
         set.data.cols.get(2)
     } else {
         None
@@ -274,15 +280,19 @@ fn draw_set_symbols(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set
             continue;
         };
         // Symbol radius in view units (Grace: 0.01 * symsize).
-        let r = match zcol {
+        let r = match zsize {
             Some(z) if graph.znorm != 0.0 => 0.01 * (z.get(i).copied().unwrap_or(0.0) / graph.znorm),
             _ => 0.01 * set.symbol_size,
         };
         if r <= 0.0 {
             continue;
         }
+        let fill_color = match zcolor {
+            Some(z) => z.get(i).copied().unwrap_or(0.0) as i32,
+            None => set.symbol_fill.color,
+        };
         let c = VPoint { x: vx, y: vy };
-        draw_one_symbol(canvas, set, c, r, do_fill, do_outline);
+        draw_one_symbol(canvas, set, c, r, do_fill, do_outline, fill_color);
     }
 }
 
@@ -299,15 +309,16 @@ pub fn draw_symbol_at(canvas: &mut Canvas, set: &Set, c: VPoint) {
         r,
         set.symbol_fill.pattern != 0,
         set.symbol_linestyle != 0,
+        set.symbol_fill.color,
     );
 }
 
 /// Draw a single symbol centered at view point `c` with view radius `r`.
-fn draw_one_symbol(canvas: &mut Canvas, set: &Set, c: VPoint, r: f64, fill: bool, outline: bool) {
+/// `fc` is the fill color index (overridable per point for xycolor sets).
+fn draw_one_symbol(canvas: &mut Canvas, set: &Set, c: VPoint, r: f64, fill: bool, outline: bool, fc: i32) {
     let lw = set.symbol_linewidth;
     let ls = set.symbol_linestyle;
     let oc = set.symbol_pen.color;
-    let fc = set.symbol_fill.color;
 
     // Build the polygon vertices (in view units) for polygonal symbols.
     let poly: Option<Vec<VPoint>> = match set.symbol {
