@@ -77,17 +77,63 @@ QtGrace6 `src/pars.yacc` is the formal reference.
 The parser is **tolerant**: any unrecognized line becomes `Command::Unknown`
 and is skipped, so one bad line never aborts a load.
 
+## Testing procedure (visual baseline comparison)
+
+We validate against **QtGrace6** as the reference renderer. No pixel parity —
+we check that the right *elements* are present and roughly placed.
+
+```bash
+scripts/baseline.sh [names...]   # qtgrace -> target/baseline/<name>.png
+scripts/compare.sh  [names...]   # oxygrace -> target/out, montage -> target/compare
+```
+
+`scripts/compare.sh` builds oxygrace, renders each example, generates the
+qtgrace baseline if missing, and writes a labelled side-by-side montage
+(**ours left, reference right**) to `target/compare/<name>.png`. All outputs are
+under the gitignored `target/`.
+
+Review loop when working a milestone:
+1. `scripts/compare.sh <name>` for the examples that exercise the feature.
+2. Open `target/compare/<name>.png` and check the element checklist below.
+3. Iterate until elements are present and placed correctly.
+
+Element checklist: page size/aspect · frame · axes bars · major/minor ticks ·
+tick labels (format/scale) · axis labels · title/subtitle · data lines · symbols
+· fills · bars · error bars · legend (box + swatches) · annotation objects
+(strings/lines/boxes/ellipses) · special/custom tick labels.
+
+qtgrace runs headless via `QT_QPA_PLATFORM=offscreen`; **the `.agr` file must be
+the first argument**, before `-hardcopy`, or it is ignored.
+
 ## Milestone status
 
-- **M1 (done)**: parse + render single/multiple XY graphs — frame, linear axes
-  with major/minor ticks, tick labels, axis labels, title/subtitle, set
-  connecting lines. Tolerant parsing of the full command vocabulary.
-- **M2 (next)**: symbols, set fills + baseline, legend rendering, line types
-  (stairs/segments), line-style dashes + fill patterns, bar charts.
-- **M3**: error bars; bar/hilo/boxplot set types; full string markup; autotick;
-  log/reciprocal/logit tick labelling.
-- **M4**: annotation objects (line/box/ellipse/string); alt axes; special tick
-  formats; polar/pie; `.xvg` ergonomics; ASCII/CSV import.
+**M1 (done):** parse the `@`-command language (tolerant), render single/multiple
+XY graphs — frame, linear axes with major/minor ticks, tick labels, axis labels,
+title/subtitle, set connecting lines.
 
-See `/home/semen/.claude/plans/we-will-build-an-wobbly-elephant.md` for the full
-plan.
+Gaps found by baseline comparison, prioritized:
+
+**M2 — plot content (makes the common plots right):**
+- `@page size W H` parsing (we currently ignore it → wrong aspect everywhere). Quick, do first.
+- Symbols (all 11 types, fill + outline).
+- Set fills (polygon / baseline; flat color first, then the 32 fill patterns).
+- Bar charts (`@type bar`/`bardy`; bar width from world spacing + `bargap`; outline+fill).
+- Legends (box, one entry per set, line/symbol swatch, text).
+- Line types (stairs, segments) + refined line-style dashes.
+
+**M3 — scales + annotations (fixes log plots and the annotation-heavy files):**
+- Log / reciprocal / logit scale tick generation + labels (powers of 10, minor 2..9).
+- Autotick algorithm (nice round numbers when `tick major` absent / on autoscale).
+- Data clipping to the frame rectangle.
+- Annotation objects: string, line (with arrows), box, ellipse — used by 32/42 examples.
+- Custom / special tick labels (`ticklabel type spec`, string labels like "Char read").
+- Alt axes (offset bars) and zero axes (`type zero`).
+
+**M4 — completeness:**
+- Error bars (xydy/xydx/…); hilo / boxplot / xyz / xysize / xycolor set types.
+- Full string-markup polish (Symbol-font Greek, all escapes).
+- Polar / pie / smith graph types.
+- `.xvg` ergonomics; ASCII/CSV import.
+
+See `/home/semen/.claude/plans/we-will-build-an-wobbly-elephant.md` for the
+original plan.
