@@ -10,21 +10,22 @@ use ttf_parser::Face;
 /// Number of Grace font slots (0..=13).
 pub const NUM_FONTS: usize = 14;
 
-/// Embedded OTF data for each Grace font slot. The mapping follows Grace's
-/// default font table (Times / Helvetica / Courier families + Symbol +
-/// Dingbats), substituted by the metric-compatible URW base35 fonts.
+/// Embedded OTF data for each Grace font slot, in Grace's canonical AGR font
+/// order (the t1lib default used when a file has no `@map font`): bold comes
+/// before italic. Verified against QtGrace's rendering of tfonts.agr.
+/// Substituted by the metric-compatible URW base35 fonts.
 static FONT_DATA: [&[u8]; NUM_FONTS] = [
     include_bytes!("../assets/fonts/NimbusRoman-Regular.otf"), // 0 Times-Roman
-    include_bytes!("../assets/fonts/NimbusRoman-Italic.otf"),  // 1 Times-Italic
-    include_bytes!("../assets/fonts/NimbusRoman-Bold.otf"),    // 2 Times-Bold
+    include_bytes!("../assets/fonts/NimbusRoman-Bold.otf"),    // 1 Times-Bold
+    include_bytes!("../assets/fonts/NimbusRoman-Italic.otf"),  // 2 Times-Italic
     include_bytes!("../assets/fonts/NimbusRoman-BoldItalic.otf"), // 3 Times-BoldItalic
     include_bytes!("../assets/fonts/NimbusSans-Regular.otf"),  // 4 Helvetica
-    include_bytes!("../assets/fonts/NimbusSans-Italic.otf"),   // 5 Helvetica-Oblique
-    include_bytes!("../assets/fonts/NimbusSans-Bold.otf"),     // 6 Helvetica-Bold
+    include_bytes!("../assets/fonts/NimbusSans-Bold.otf"),     // 5 Helvetica-Bold
+    include_bytes!("../assets/fonts/NimbusSans-Italic.otf"),   // 6 Helvetica-Oblique
     include_bytes!("../assets/fonts/NimbusSans-BoldItalic.otf"), // 7 Helvetica-BoldOblique
     include_bytes!("../assets/fonts/NimbusMonoPS-Regular.otf"), // 8 Courier
-    include_bytes!("../assets/fonts/NimbusMonoPS-Italic.otf"), // 9 Courier-Oblique
-    include_bytes!("../assets/fonts/NimbusMonoPS-Bold.otf"),   // 10 Courier-Bold
+    include_bytes!("../assets/fonts/NimbusMonoPS-Bold.otf"),   // 9 Courier-Bold
+    include_bytes!("../assets/fonts/NimbusMonoPS-Italic.otf"), // 10 Courier-Oblique
     include_bytes!("../assets/fonts/NimbusMonoPS-BoldItalic.otf"), // 11 Courier-BoldOblique
     include_bytes!("../assets/fonts/StandardSymbolsPS.otf"),   // 12 Symbol
     include_bytes!("../assets/fonts/D050000L.otf"),            // 13 ZapfDingbats

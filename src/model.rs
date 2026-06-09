@@ -455,9 +455,10 @@ pub struct Project {
 impl Default for Project {
     fn default() -> Self {
         Project {
-            // Grace's DEFAULT_PAGE_WIDTH / DEFAULT_PAGE_HEIGHT at 72 DPI.
-            page_width: 733,
-            page_height: 538,
+            // QtGrace's hardcopy default for files without `@page size`:
+            // US Letter landscape at 72 DPI (matches its PNG export).
+            page_width: 792,
+            page_height: 612,
             dpi: 72.0,
             defaults: Defaults::default(),
             color_overrides: Vec::new(),
