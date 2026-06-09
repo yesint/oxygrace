@@ -144,6 +144,8 @@ pub enum LegendProp {
     Active(bool),
     LoctypeView(bool),
     Position(f64, f64),
+    X(f64),
+    Y(f64),
     Font(i32),
     Color(i32),
     CharSize(f64),
@@ -475,6 +477,8 @@ peg::parser! {
             / kw("font") __ n:iflex() { LegendProp::Font(n) }
             / kw("color") __ n:iflex() { LegendProp::Color(n) }
             / kw("char") __ kw("size") __ n:num() { LegendProp::CharSize(n) }
+            / (['x' | 'X'] "1") __ n:num() { LegendProp::X(n) }
+            / (['y' | 'Y'] "1") __ n:num() { LegendProp::Y(n) }
             / kw("length") __ n:num() { LegendProp::Length(n) }
             / kw("vgap") __ n:num() { LegendProp::Vgap(n) }
             / kw("hgap") __ n:num() { LegendProp::Hgap(n) }

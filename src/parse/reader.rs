@@ -347,6 +347,8 @@ fn apply_legend(legend: &mut crate::model::Legend, p: LegendProp) {
             legend.x = x;
             legend.y = y;
         }
+        LegendProp::X(x) => legend.x = x,
+        LegendProp::Y(y) => legend.y = y,
         LegendProp::Font(n) => legend.font = n,
         LegendProp::Color(n) => legend.color = n,
         LegendProp::CharSize(n) => legend.charsize = n,
