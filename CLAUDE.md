@@ -113,13 +113,15 @@ title/subtitle, set connecting lines.
 
 Gaps found by baseline comparison, prioritized:
 
-**M2 — plot content (makes the common plots right):**
-- `@page size W H` parsing (we currently ignore it → wrong aspect everywhere). Quick, do first.
+**M2 (done):**
+- `@page size W H` parsing (fixes aspect ratio across the corpus).
 - Symbols (all 11 types, fill + outline).
-- Set fills (polygon / baseline; flat color first, then the 32 fill patterns).
-- Bar charts (`@type bar`/`bardy`; bar width from world spacing + `bargap`; outline+fill).
-- Legends (box, one entry per set, line/symbol swatch, text).
-- Line types (stairs, segments) + refined line-style dashes.
+- Set fills (polygon / baseline, flat color). *Hatch patterns + fill-between-sets deferred.*
+- Bar charts (`@type bar`/`bardy`; grouped + stacked + plain; outline+fill).
+- Legends (box, per-set line/symbol/box swatch, text).
+- Line types (left/right stairs) + Grace's nine dash patterns + line-width scaling.
+- Fix: old (pre-`@target`) files attach inline data to the current graph's set 0.
+- *Deferred to later: SYM_CHAR glyph symbols, segment2/3 line types, hatch fill patterns.*
 
 **M3 — scales + annotations (fixes log plots and the annotation-heavy files):**
 - Log / reciprocal / logit scale tick generation + labels (powers of 10, minor 2..9).

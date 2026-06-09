@@ -265,19 +265,21 @@ impl<'a> Canvas<'a> {
 
 /// Dash pattern (in px) for a Grace line style index, or `None` for solid.
 ///
-/// Approximates Grace's nine line styles (`patterns.h`); style 1 is solid.
-/// Lengths scale with line width so dashes stay visible on thick lines.
+/// These are Grace's nine `dash_array` patterns (`patterns.h`); each value is a
+/// multiple of the line width (as in Qt's `setDashPattern`), so we scale by the
+/// device line width. Style 0 = none, 1 = solid (both `None` here; style 0 is
+/// skipped by the caller).
 fn dash_pattern(linestyle: i32, width: f32) -> Option<Vec<f32>> {
     let u = width.max(1.0);
     let pat: &[f32] = match linestyle {
-        2 => &[4.0, 2.0],            // dotted-ish
-        3 => &[8.0, 4.0],            // dashed
-        4 => &[1.0, 3.0],            // dotted
-        5 => &[8.0, 4.0, 1.0, 4.0],  // dash-dot
-        6 => &[12.0, 4.0],           // long dash
-        7 => &[12.0, 4.0, 1.0, 4.0], // long dash-dot
-        8 => &[1.0, 2.0, 8.0, 2.0],  // dot-dash
-        _ => return None,            // 0/1 -> solid (0 handled by caller)
+        2 => &[1.0, 3.0],                // dotted
+        3 => &[5.0, 3.0],                // dashed
+        4 => &[7.0, 3.0],                // long dash
+        5 => &[1.0, 3.0, 5.0, 3.0],      // dot-dash
+        6 => &[1.0, 3.0, 7.0, 3.0],      // dot-longdash
+        7 => &[1.0, 3.0, 5.0, 3.0, 1.0, 3.0], // dot-dash-dot
+        8 => &[5.0, 3.0, 1.0, 3.0, 5.0, 3.0], // dash-dot-dash
+        _ => return None,                // 0/1 -> solid
     };
     Some(pat.iter().map(|d| d * u).collect())
 }

@@ -204,7 +204,18 @@ fn draw_set_line(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
 
     for i in 0..n {
         match wt.world_to_view(xs[i], ys[i]) {
-            Some((vx, vy)) => segment.push(VPoint { x: vx, y: vy }),
+            Some((vx, vy)) => {
+                let p = VPoint { x: vx, y: vy };
+                // Insert the stair step vertex between consecutive points.
+                if let Some(&prev) = segment.last() {
+                    match set.line_type {
+                        LineType::LeftStair => segment.push(VPoint { x: prev.x, y: p.y }),
+                        LineType::RightStair => segment.push(VPoint { x: p.x, y: prev.y }),
+                        _ => {}
+                    }
+                }
+                segment.push(p);
+            }
             None => flush(&mut segment, canvas),
         }
     }
