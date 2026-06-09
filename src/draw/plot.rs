@@ -2,7 +2,7 @@
 //! (`src/plotone.cpp`): frame fill → grid/data → axes+ticks → frame border →
 //! titles. Legend and annotation objects are added in later milestones.
 
-use crate::draw::{axes, sets};
+use crate::draw::{axes, decor, sets};
 use crate::model::{Graph, Project};
 use crate::render::{Canvas, HAlign, VAlign, VPoint};
 
@@ -25,6 +25,7 @@ fn draw_graph(canvas: &mut Canvas, graph: &Graph) {
     sets::draw_sets(canvas, graph);
     axes::draw_axes(canvas, graph);
     draw_frame_border(canvas, graph);
+    decor::draw_legend(canvas, graph);
     draw_titles(canvas, graph);
 }
 

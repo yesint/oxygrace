@@ -89,7 +89,8 @@ fn flush_data(project: &mut Project, cur: &mut Cursor) {
         return;
     }
     let rows = std::mem::take(&mut cur.rows);
-    let Some((g, s)) = cur.target else { return };
+    // Old (pre-@target) files attach data to the current graph's set 0.
+    let (g, s) = cur.target.unwrap_or((cur.current_graph, 0));
     let ncols = cur
         .data_type
         .ncols()
@@ -113,7 +114,12 @@ fn apply(project: &mut Project, cur: &mut Cursor, cmd: Command) {
                 project.page_height = h.round() as u32;
             }
         }
-        Command::With { graph, .. } => cur.current_graph = graph,
+        Command::With { graph, set } => {
+            cur.current_graph = graph;
+            // `@with gN.sM` directs data into that set; a bare `@with gN`
+            // clears the explicit target so data falls back to set 0.
+            cur.target = set.map(|s| (graph, s));
+        }
         Command::Target { graph, set } => {
             cur.current_graph = graph;
             cur.target = Some((graph, set));
@@ -342,6 +348,16 @@ fn apply_legend(legend: &mut crate::model::Legend, p: LegendProp) {
         LegendProp::Font(n) => legend.font = n,
         LegendProp::Color(n) => legend.color = n,
         LegendProp::CharSize(n) => legend.charsize = n,
+        LegendProp::Length(n) => legend.length = n,
+        LegendProp::Vgap(n) => legend.vgap = n,
+        LegendProp::Hgap(n) => legend.hgap = n,
+        LegendProp::Invert(b) => legend.invert = b,
+        LegendProp::BoxOn(b) => legend.box_on = b,
+        LegendProp::BoxColor(n) => legend.box_color = n,
+        LegendProp::BoxLinewidth(n) => legend.box_linewidth = n,
+        LegendProp::BoxLinestyle(n) => legend.box_linestyle = n,
+        LegendProp::BoxFillColor(n) => legend.box_fill_color = n,
+        LegendProp::BoxFillPattern(n) => legend.box_fill_pattern = n,
         LegendProp::Ignored => {}
     }
 }

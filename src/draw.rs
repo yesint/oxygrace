@@ -2,6 +2,7 @@
 //! orchestrating the plot ([`plot`]), axes ([`axes`]) and datasets ([`sets`]).
 
 pub mod axes;
+pub mod decor;
 pub mod plot;
 pub mod sets;
 

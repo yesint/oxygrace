@@ -135,6 +135,18 @@ impl<'a> Canvas<'a> {
             .fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
     }
 
+    /// Width of a marked-up string in view units, at the given char size.
+    pub fn text_width_view(&self, s: &str, charsize: f64, font: i32) -> f64 {
+        let em = text::measure(self.fonts, s, font) as f64;
+        // em units -> view: one em at `charsize` spans charsize*MAGIC_FONT_SCALE.
+        em * charsize * crate::render::transform::MAGIC_FONT_SCALE
+    }
+
+    /// One em height in view units at the given char size.
+    pub fn em_view(&self, charsize: f64) -> f64 {
+        charsize * crate::render::transform::MAGIC_FONT_SCALE
+    }
+
     /// Fill a circle (center + radius in view units) with a color index.
     pub fn fill_circle(&mut self, center: VPoint, radius_view: f64, color: i32) {
         let (cx, cy) = self.page.view_to_device(center.x, center.y);

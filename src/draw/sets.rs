@@ -130,6 +130,22 @@ fn draw_set_symbols(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
     }
 }
 
+/// Draw a set's symbol centered at a view point (used by the legend swatch).
+pub fn draw_symbol_at(canvas: &mut Canvas, set: &Set, c: VPoint) {
+    if set.symbol == SymbolType::None {
+        return;
+    }
+    let r = 0.01 * set.symbol_size;
+    draw_one_symbol(
+        canvas,
+        set,
+        c,
+        r,
+        set.symbol_fill.pattern != 0,
+        set.symbol_linestyle != 0,
+    );
+}
+
 /// Draw a single symbol centered at view point `c` with view radius `r`.
 fn draw_one_symbol(canvas: &mut Canvas, set: &Set, c: VPoint, r: f64, fill: bool, outline: bool) {
     let lw = set.symbol_linewidth;

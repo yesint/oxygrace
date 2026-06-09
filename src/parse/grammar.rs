@@ -147,6 +147,16 @@ pub enum LegendProp {
     Font(i32),
     Color(i32),
     CharSize(f64),
+    Length(f64),
+    Vgap(f64),
+    Hgap(f64),
+    Invert(bool),
+    BoxOn(bool),
+    BoxColor(i32),
+    BoxLinewidth(f64),
+    BoxLinestyle(i32),
+    BoxFillColor(i32),
+    BoxFillPattern(i32),
     Ignored,
 }
 
@@ -461,7 +471,21 @@ peg::parser! {
             / kw("font") __ n:iflex() { LegendProp::Font(n) }
             / kw("color") __ n:iflex() { LegendProp::Color(n) }
             / kw("char") __ kw("size") __ n:num() { LegendProp::CharSize(n) }
+            / kw("length") __ n:num() { LegendProp::Length(n) }
+            / kw("vgap") __ n:num() { LegendProp::Vgap(n) }
+            / kw("hgap") __ n:num() { LegendProp::Hgap(n) }
+            / kw("invert") __ b:onoff() { LegendProp::Invert(b) }
+            / kw("box") __ p:legend_box() { p }
             / x:num() comma() y:num() { LegendProp::Position(x, y) }
+            / [_]* { LegendProp::Ignored }
+
+        rule legend_box() -> LegendProp
+            = b:onoff() { LegendProp::BoxOn(b) }
+            / kw("color") __ n:iflex() { LegendProp::BoxColor(n) }
+            / kw("linewidth") __ n:num() { LegendProp::BoxLinewidth(n) }
+            / kw("linestyle") __ n:iflex() { LegendProp::BoxLinestyle(n) }
+            / kw("fill") __ kw("color") __ n:iflex() { LegendProp::BoxFillColor(n) }
+            / kw("fill") __ kw("pattern") __ n:iflex() { LegendProp::BoxFillPattern(n) }
             / [_]* { LegendProp::Ignored }
 
         rule map_color() -> Command

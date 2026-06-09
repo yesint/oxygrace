@@ -229,17 +229,33 @@ impl Default for Labels {
     }
 }
 
-/// Legend placement and styling (rendering deferred past M1).
+/// Legend placement and styling.
 #[derive(Debug, Clone)]
 pub struct Legend {
     pub active: bool,
     /// Position in view coordinates if `loctype_view`, else world coordinates.
     pub loctype_view: bool,
+    /// Top-left anchor of the legend.
     pub x: f64,
     pub y: f64,
     pub font: i32,
     pub charsize: f64,
     pub color: i32,
+    /// Swatch line length (Grace `legend length`, in 0.01 view units).
+    pub length: f64,
+    /// Vertical gap between entries (0.01 view units).
+    pub vgap: f64,
+    /// Horizontal gap (0.01 view units).
+    pub hgap: f64,
+    /// Reverse entry order.
+    pub invert: bool,
+    /// Draw the surrounding box.
+    pub box_on: bool,
+    pub box_color: i32,
+    pub box_linewidth: f64,
+    pub box_linestyle: i32,
+    pub box_fill_color: i32,
+    pub box_fill_pattern: i32,
 }
 
 impl Default for Legend {
@@ -252,6 +268,16 @@ impl Default for Legend {
             font: 0,
             charsize: 1.0,
             color: 1,
+            length: 4.0,
+            vgap: 1.0,
+            hgap: 1.0,
+            invert: false,
+            box_on: true,
+            box_color: 1,
+            box_linewidth: 1.0,
+            box_linestyle: 1,
+            box_fill_color: 0,
+            box_fill_pattern: 1,
         }
     }
 }
