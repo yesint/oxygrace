@@ -18,6 +18,9 @@ struct Cursor {
     current_graph: usize,
     /// Dataset that data rows / `@type` flow into (set by `@target`).
     target: Option<(usize, usize)>,
+    /// Next implicit set index when no `@target` is active (old-format files
+    /// stream successive `&`-separated blocks into successive sets).
+    auto_set: usize,
     /// Dataset type for the data currently being read.
     data_type: SetType,
     /// Accumulated numeric rows for the current data block.
@@ -31,6 +34,7 @@ impl Cursor {
         Cursor {
             current_graph: 0,
             target: None,
+            auto_set: 0,
             data_type: SetType::Xy,
             rows: Vec::new(),
             world_set: Vec::new(),
@@ -89,8 +93,16 @@ fn flush_data(project: &mut Project, cur: &mut Cursor) {
         return;
     }
     let rows = std::mem::take(&mut cur.rows);
-    // Old (pre-@target) files attach data to the current graph's set 0.
-    let (g, s) = cur.target.unwrap_or((cur.current_graph, 0));
+    // With an explicit `@target` use it; otherwise (old-format files) stream
+    // each successive block into the next set of the current graph.
+    let (g, s) = match cur.target {
+        Some(t) => t,
+        None => {
+            let s = cur.auto_set;
+            cur.auto_set += 1;
+            (cur.current_graph, s)
+        }
+    };
     let ncols = cur
         .data_type
         .ncols()
@@ -117,8 +129,12 @@ fn apply(project: &mut Project, cur: &mut Cursor, cmd: Command) {
         Command::With { graph, set } => {
             cur.current_graph = graph;
             // `@with gN.sM` directs data into that set; a bare `@with gN`
-            // clears the explicit target so data falls back to set 0.
+            // clears the explicit target and resets the implicit set counter,
+            // so streamed blocks start at set 0 of the new graph.
             cur.target = set.map(|s| (graph, s));
+            if set.is_none() {
+                cur.auto_set = 0;
+            }
         }
         Command::Target { graph, set } => {
             cur.current_graph = graph;
