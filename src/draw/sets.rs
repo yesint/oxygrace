@@ -133,7 +133,12 @@ fn draw_one_bar_set(canvas: &mut Canvas, wt: &WorldTransform, set: &Set, offset:
 /// Fill the area of a set: the closed data polygon, or between the curve and a
 /// baseline. Drawn with the set's fill pen.
 fn draw_set_fill(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &Set) {
-    if set.fill_type == FillType::None || set.fill_pen.pattern == 0 {
+    // Grace's drawsetfill only fills when a line type defines the path; bar
+    // sets (and any set with line type "none") get no polygon fill.
+    if set.fill_type == FillType::None
+        || set.fill_pen.pattern == 0
+        || set.line_type == LineType::None
+    {
         return;
     }
     let (Some(xs), Some(ys)) = (set.data.x(), set.data.y()) else {
