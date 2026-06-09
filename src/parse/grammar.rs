@@ -153,6 +153,8 @@ pub enum LegendProp {
 #[derive(Debug, Clone)]
 pub enum Command {
     Version(i32),
+    /// `@page size W H` / `@page resize W H` — page dimensions in pixels.
+    PageSize(f64, f64),
     With { graph: usize, set: Option<usize> },
     Target { graph: usize, set: usize },
     TypeDecl(SetType),
@@ -223,6 +225,7 @@ peg::parser! {
 
         rule cmd() -> Command
             = version()
+            / page_cmd()
             / with()
             / target()
             / type_decl()
@@ -240,6 +243,13 @@ peg::parser! {
             / map_color()
 
         rule version() -> Command = kw("version") __ n:int() { Command::Version(n) }
+
+        /// `@page size 600 600` / `@page resize 800, 600`. Other `@page ...`
+        /// forms (scroll, inout, background) fall through to Unknown.
+        rule page_cmd() -> Command
+            = kw("page") __ (kw("size") / kw("resize")) __ w:num() (comma() / __) h:num() {
+                Command::PageSize(w, h)
+            }
 
         rule with() -> Command
             = kw("with") __ g:gsel() s:("." ['s'|'S'] n:uint() { n })? {

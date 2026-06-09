@@ -107,6 +107,12 @@ fn flush_data(project: &mut Project, cur: &mut Cursor) {
 fn apply(project: &mut Project, cur: &mut Cursor, cmd: Command) {
     match cmd {
         Command::Version(_) | Command::Unknown => {}
+        Command::PageSize(w, h) => {
+            if w >= 1.0 && h >= 1.0 {
+                project.page_width = w.round() as u32;
+                project.page_height = h.round() as u32;
+            }
+        }
         Command::With { graph, .. } => cur.current_graph = graph,
         Command::Target { graph, set } => {
             cur.current_graph = graph;

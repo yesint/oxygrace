@@ -135,6 +135,44 @@ impl<'a> Canvas<'a> {
             .fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
     }
 
+    /// Fill a circle (center + radius in view units) with a color index.
+    pub fn fill_circle(&mut self, center: VPoint, radius_view: f64, color: i32) {
+        let (cx, cy) = self.page.view_to_device(center.x, center.y);
+        let r = self.page.view_len_px(radius_view);
+        if r <= 0.0 {
+            return;
+        }
+        let Some(path) = PathBuilder::from_circle(cx, cy, r) else {
+            return;
+        };
+        let mut paint = Paint::default();
+        paint.set_color(color::resolve(self.project, color).to_skia());
+        paint.anti_alias = true;
+        self.pixmap
+            .fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+    }
+
+    /// Stroke a circle outline (center + radius in view units).
+    pub fn stroke_circle(&mut self, center: VPoint, radius_view: f64, color: i32, lw: f64, ls: i32) {
+        if ls == 0 {
+            return;
+        }
+        let (cx, cy) = self.page.view_to_device(center.x, center.y);
+        let r = self.page.view_len_px(radius_view);
+        if r <= 0.0 {
+            return;
+        }
+        let Some(path) = PathBuilder::from_circle(cx, cy, r) else {
+            return;
+        };
+        let mut paint = Paint::default();
+        paint.set_color(color::resolve(self.project, color).to_skia());
+        paint.anti_alias = true;
+        let stroke = self.stroke(ls, self.page.linewidth_px(lw));
+        self.pixmap
+            .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+    }
+
     /// Draw a marked-up string anchored at a view point.
     ///
     /// `charsize` is the Grace character size; `base_font`/`color` are the
