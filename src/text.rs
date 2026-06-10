@@ -139,6 +139,14 @@ pub fn parse(input: &str, base_font: i32) -> Vec<StyledRun> {
                 scale /= ENLARGE;
                 chars.next();
             }
+            // Line break: Grace `\n` drops the baseline by exactly one em and
+            // returns the pen to the start x (t1fonts.cpp, case 'n':
+            // `baseline -= 1.0`, goto MARK_CR). Encoded as a literal newline
+            // in the run text and handled in `layout`.
+            'n' => {
+                buf.push('\n');
+                chars.next();
+            }
             // Reset to defaults.
             'B' => {
                 flush!();
@@ -197,13 +205,22 @@ pub fn layout(fonts: &FontSet, input: &str, base_font: i32) -> Layout {
     let runs = parse(input, base_font);
     let mut glyphs = Vec::new();
     let mut pen = 0.0f32;
+    let mut width = 0.0f32;
+    // Extra baseline drop accumulated by `\n` breaks (one em per line).
+    let mut line = 0.0f32;
     for run in &runs {
         for ch in run.text.chars() {
+            if ch == '\n' {
+                width = width.max(pen);
+                pen = 0.0;
+                line -= 1.0;
+                continue;
+            }
             let g = fonts.outline_char(run.font, ch);
             glyphs.push(LaidGlyph {
                 font: run.font,
                 x: pen,
-                y: run.baseline,
+                y: run.baseline + line,
                 scale: run.scale,
                 ch,
                 color: run.color,
@@ -211,7 +228,10 @@ pub fn layout(fonts: &FontSet, input: &str, base_font: i32) -> Layout {
             pen += g.advance * run.scale;
         }
     }
-    Layout { glyphs, width: pen }
+    Layout {
+        glyphs,
+        width: width.max(pen),
+    }
 }
 
 /// Quick measurement of a marked-up string's advance width in em units.

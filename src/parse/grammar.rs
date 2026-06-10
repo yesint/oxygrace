@@ -168,10 +168,60 @@ pub enum LegendProp {
     Ignored,
 }
 
+/// Kind of annotation object opened by `@with string|line|box|ellipse`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjKind {
+    String,
+    Line,
+    Box,
+    Ellipse,
+}
+
+/// A property line of the annotation object currently being defined.
+#[derive(Debug, Clone)]
+pub enum ObjProp {
+    On(bool),
+    /// `loctype view` (true) / `loctype world` (false).
+    LoctypeView(bool),
+    /// `string g0` — attach to a graph (for world loctype).
+    Graph(usize),
+    /// `string 0.5, 0.2` — anchor point.
+    Pos2(f64, f64),
+    /// `line/box/ellipse x1, y1, x2, y2`.
+    Pos4(f64, f64, f64, f64),
+    Color(i32),
+    Linewidth(f64),
+    Linestyle(i32),
+    Rot(f64),
+    Font(i32),
+    Just(i32),
+    CharSize(f64),
+    FillColor(i32),
+    FillPattern(i32),
+    /// `arrow 0..3` — which line ends carry an arrowhead.
+    ArrowEnd(i32),
+    ArrowType(i32),
+    /// `arrow length 1.0` (new) / `arrow size 1.0` (old format).
+    ArrowLength(f64),
+    /// `arrow layout d, l` — d/L and l/L form factors.
+    ArrowLayout(f64, f64),
+    /// `@string def "text"` — the string text (also activates it).
+    Def(String),
+    /// `@line def` / `@box def` / `@ellipse def` end-of-definition marker.
+    EndDef,
+    Ignored,
+}
+
 /// One parsed command from a `.agr` line.
 #[derive(Debug, Clone)]
 pub enum Command {
     Version(i32),
+    /// `@with string|line|box|ellipse` — open a new annotation object.
+    WithObject(ObjKind),
+    /// `@ <kind> <prop>` while an object definition is open.
+    Object { kind: ObjKind, prop: ObjProp },
+    /// `@timestamp <prop>` — the page timestamp string.
+    Timestamp(ObjProp),
     /// `@page size W H` / `@page resize W H` — page dimensions in pixels.
     PageSize(f64, f64),
     With { graph: usize, set: Option<usize> },
@@ -249,6 +299,7 @@ peg::parser! {
             = version()
             / page_cmd()
             / with()
+            / object_cmd()
             / target()
             / type_decl()
             / graph_prefixed()
@@ -278,6 +329,48 @@ peg::parser! {
             = kw("with") __ g:gsel() s:("." ['s'|'S'] n:uint() { n })? {
                 Command::With { graph: g, set: s }
             }
+            / kw("with") __ k:objkind() { Command::WithObject(k) }
+
+        rule objkind() -> ObjKind
+            = kw("string") { ObjKind::String }
+            / kw("line") { ObjKind::Line }
+            / kw("box") { ObjKind::Box }
+            / kw("ellipse") { ObjKind::Ellipse }
+
+        /// Property line of an open object definition: `@ string on`,
+        /// `@ line 0.1, 0.2, 0.3, 0.4`, `@string def "text"`, `@box def` …
+        rule object_cmd() -> Command
+            = k:objkind() __ p:obj_prop() { Command::Object { kind: k, prop: p } }
+            / kw("timestamp") __ p:obj_prop() { Command::Timestamp(p) }
+            / kw("timestamp") { Command::Timestamp(ObjProp::Ignored) }
+
+        rule obj_prop() -> ObjProp
+            = kw("on") { ObjProp::On(true) }
+            / kw("off") { ObjProp::On(false) }
+            / kw("loctype") __ v:(kw("view") { true } / kw("world") { false }) {
+                ObjProp::LoctypeView(v)
+            }
+            / kw("def") __ s:qstring() { ObjProp::Def(s) }
+            / kw("def") { ObjProp::EndDef }
+            / kw("color") __ n:iflex() { ObjProp::Color(n) }
+            / kw("linewidth") __ v:num() { ObjProp::Linewidth(v) }
+            / kw("linestyle") __ n:iflex() { ObjProp::Linestyle(n) }
+            / kw("rot") __ v:num() { ObjProp::Rot(v) }
+            / kw("font") __ n:iflex() { ObjProp::Font(n) }
+            / kw("just") __ n:iflex() { ObjProp::Just(n) }
+            / kw("char") __ kw("size") __ v:num() { ObjProp::CharSize(v) }
+            / kw("fill") __ kw("color") __ n:iflex() { ObjProp::FillColor(n) }
+            / kw("fill") __ kw("pattern") __ n:iflex() { ObjProp::FillPattern(n) }
+            / kw("arrow") __ kw("type") __ n:iflex() { ObjProp::ArrowType(n) }
+            / kw("arrow") __ (kw("length") / kw("size")) __ v:num() { ObjProp::ArrowLength(v) }
+            / kw("arrow") __ kw("layout") __ d:num() comma() l:num() { ObjProp::ArrowLayout(d, l) }
+            / kw("arrow") __ n:iflex() { ObjProp::ArrowEnd(n) }
+            / g:gsel() { ObjProp::Graph(g) }
+            / x1:num() comma() y1:num() comma() x2:num() comma() y2:num() {
+                ObjProp::Pos4(x1, y1, x2, y2)
+            }
+            / x:num() comma() y:num() { ObjProp::Pos2(x, y) }
+            / [_]* { ObjProp::Ignored }
 
         rule target() -> Command
             = kw("target") __ g:gsel() "." s:ssel() {

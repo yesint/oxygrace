@@ -309,6 +309,34 @@ impl<'a> Canvas<'a> {
             .stroke_path(&path, &paint, &stroke, Transform::identity(), self.clip.as_ref());
     }
 
+    /// Build the oval path inscribed in a view-coordinate rectangle.
+    fn oval_path(&self, p1: VPoint, p2: VPoint) -> Option<Path> {
+        let (x1, y1) = self.page.view_to_device(p1.x, p1.y);
+        let (x2, y2) = self.page.view_to_device(p2.x, p2.y);
+        let rect = tiny_skia::Rect::from_ltrb(x1.min(x2), y1.min(y2), x1.max(x2), y1.max(y2))?;
+        PathBuilder::from_oval(rect)
+    }
+
+    /// Fill the ellipse inscribed in the rectangle spanned by two view points.
+    pub fn fill_ellipse(&mut self, p1: VPoint, p2: VPoint, color: i32, pattern: i32) {
+        let Some(path) = self.oval_path(p1, p2) else { return };
+        self.fill_path_pen(&path, color, pattern);
+    }
+
+    /// Stroke the ellipse inscribed in the rectangle spanned by two view points.
+    pub fn stroke_ellipse(&mut self, p1: VPoint, p2: VPoint, color: i32, lw: f64, ls: i32) {
+        if ls == 0 {
+            return;
+        }
+        let Some(path) = self.oval_path(p1, p2) else { return };
+        let mut paint = Paint::default();
+        paint.set_color(color::resolve(self.project, color).to_skia());
+        paint.anti_alias = true;
+        let stroke = self.stroke(ls, self.page.linewidth_px(lw));
+        self.pixmap
+            .stroke_path(&path, &paint, &stroke, Transform::identity(), self.clip.as_ref());
+    }
+
     /// Draw a marked-up string anchored at a view point.
     ///
     /// `charsize` is the Grace character size; `base_font`/`color` are the

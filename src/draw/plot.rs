@@ -2,18 +2,25 @@
 //! (`src/plotone.cpp`): frame fill → grid/data → axes+ticks → frame border →
 //! titles. Legend and annotation objects are added in later milestones.
 
-use crate::draw::{axes, decor, sets};
+use crate::draw::{axes, decor, objects, sets};
 use crate::model::{Graph, Project};
 use crate::render::{Canvas, HAlign, VAlign, VPoint};
 
 /// Render an entire project onto a fresh canvas-backed pixmap.
 pub fn draw_project(project: &Project, fonts: &crate::font::FontSet) -> Vec<u8> {
     let mut canvas = Canvas::new(project, fonts);
-    for graph in &project.graphs {
+    for (i, graph) in project.graphs.iter().enumerate() {
         if !graph.hidden {
             draw_graph(&mut canvas, graph);
+            // World-loctype annotation objects attached to this graph
+            // (plotone.cpp: draw_objects(gno) at the end of plotone).
+            objects::draw_objects(&mut canvas, project, objects::Pass::Graph { index: i, graph });
         }
     }
+    // View-loctype objects are drawn once, after all graphs
+    // (drawgraph: draw_objects(-1)), then the timestamp (draw_timestamp).
+    objects::draw_objects(&mut canvas, project, objects::Pass::Page);
+    objects::draw_timestamp(&mut canvas, project);
     canvas.to_png()
 }
 

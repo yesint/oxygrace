@@ -8,8 +8,8 @@
 use crate::model::{Project, ScaleType, SetType};
 use crate::parse::data;
 use crate::parse::grammar::{
-    self, AxisProp, Bound, Command, DefaultProp, FrameProp, LegendProp, SetProp, TextProp,
-    TickLevelProp, ViewSpec, WorldSpec,
+    self, AxisProp, Bound, Command, DefaultProp, FrameProp, LegendProp, ObjKind, ObjProp, SetProp,
+    TextProp, TickLevelProp, ViewSpec, WorldSpec,
 };
 
 /// Mutable state carried while reading a file.
@@ -122,6 +122,30 @@ fn postprocess_version(project: &mut Project, version: i32) {
                 graph.legend.y *= ey;
             }
         }
+        // View-loctype annotation objects are rescaled the same way
+        // (graphs.cpp postprocess_project).
+        for s in &mut project.strings {
+            if s.loctype_view {
+                s.x *= ex;
+                s.y *= ey;
+            }
+        }
+        for l in &mut project.lines {
+            if l.loctype_view {
+                l.x1 *= ex;
+                l.y1 *= ey;
+                l.x2 *= ex;
+                l.y2 *= ey;
+            }
+        }
+        for b in project.boxes.iter_mut().chain(project.ellipses.iter_mut()) {
+            if b.loctype_view {
+                b.x1 *= ex;
+                b.y1 *= ey;
+                b.x2 *= ex;
+                b.y2 *= ey;
+            }
+        }
     }
 }
 
@@ -228,6 +252,112 @@ fn apply(project: &mut Project, cur: &mut Cursor, cmd: Command) {
         Command::MapColor { index, rgb } => {
             project.color_overrides.retain(|&(i, _)| i != index);
             project.color_overrides.push((index, rgb));
+        }
+        Command::WithObject(kind) => {
+            // `@with string|line|box|ellipse` opens a new object. New-format
+            // files set the attachment graph explicitly (`string g0`); old
+            // world-loctype objects implicitly belong to the current graph.
+            let d = project.defaults;
+            let g = cur.current_graph;
+            match kind {
+                ObjKind::String => {
+                    let mut o = crate::model::StringObj::with_defaults(&d);
+                    o.gno = g;
+                    project.strings.push(o);
+                }
+                ObjKind::Line => {
+                    let mut o = crate::model::LineObj::with_defaults(&d);
+                    o.gno = g;
+                    project.lines.push(o);
+                }
+                ObjKind::Box | ObjKind::Ellipse => {
+                    let mut o = crate::model::BoxObj::with_defaults(&d);
+                    o.gno = g;
+                    if kind == ObjKind::Box {
+                        project.boxes.push(o);
+                    } else {
+                        project.ellipses.push(o);
+                    }
+                }
+            }
+        }
+        Command::Object { kind, prop } => apply_object(project, kind, prop),
+        Command::Timestamp(prop) => {
+            let o = &mut project.timestamp;
+            match prop {
+                ObjProp::On(b) => o.active = b,
+                ObjProp::Pos2(x, y) => (o.x, o.y) = (x, y),
+                ObjProp::Color(n) => o.color = n,
+                ObjProp::Rot(r) => o.rot = r,
+                ObjProp::Font(n) => o.font = n,
+                ObjProp::CharSize(v) => o.charsize = v,
+                ObjProp::Def(s) => o.text = s,
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Apply a property line to the annotation object currently being defined
+/// (the most recently opened one of its kind).
+fn apply_object(project: &mut Project, kind: ObjKind, prop: ObjProp) {
+    match kind {
+        ObjKind::String => {
+            let Some(o) = project.strings.last_mut() else { return };
+            match prop {
+                ObjProp::On(b) => o.active = b,
+                ObjProp::LoctypeView(v) => o.loctype_view = v,
+                ObjProp::Graph(g) => o.gno = g,
+                ObjProp::Pos2(x, y) => (o.x, o.y) = (x, y),
+                ObjProp::Color(n) => o.color = n,
+                ObjProp::Rot(r) => o.rot = r,
+                ObjProp::Font(n) => o.font = n,
+                ObjProp::Just(n) => o.just = n,
+                ObjProp::CharSize(v) => o.charsize = v,
+                ObjProp::Def(s) => o.text = s,
+                _ => {}
+            }
+        }
+        ObjKind::Line => {
+            let Some(o) = project.lines.last_mut() else { return };
+            match prop {
+                ObjProp::On(b) => o.active = b,
+                ObjProp::LoctypeView(v) => o.loctype_view = v,
+                ObjProp::Graph(g) => o.gno = g,
+                ObjProp::Pos4(x1, y1, x2, y2) => {
+                    (o.x1, o.y1, o.x2, o.y2) = (x1, y1, x2, y2);
+                }
+                ObjProp::Color(n) => o.color = n,
+                ObjProp::Linewidth(v) => o.linewidth = v,
+                ObjProp::Linestyle(n) => o.linestyle = n,
+                ObjProp::ArrowEnd(n) => o.arrow_end = n,
+                ObjProp::ArrowType(n) => o.arrow_type = n,
+                ObjProp::ArrowLength(v) => o.arrow_length = v,
+                ObjProp::ArrowLayout(d, l) => (o.arrow_dl, o.arrow_ll) = (d, l),
+                _ => {}
+            }
+        }
+        ObjKind::Box | ObjKind::Ellipse => {
+            let o = if kind == ObjKind::Box {
+                project.boxes.last_mut()
+            } else {
+                project.ellipses.last_mut()
+            };
+            let Some(o) = o else { return };
+            match prop {
+                ObjProp::On(b) => o.active = b,
+                ObjProp::LoctypeView(v) => o.loctype_view = v,
+                ObjProp::Graph(g) => o.gno = g,
+                ObjProp::Pos4(x1, y1, x2, y2) => {
+                    (o.x1, o.y1, o.x2, o.y2) = (x1, y1, x2, y2);
+                }
+                ObjProp::Color(n) => o.color = n,
+                ObjProp::Linewidth(v) => o.linewidth = v,
+                ObjProp::Linestyle(n) => o.linestyle = n,
+                ObjProp::FillColor(n) => o.fill_color = n,
+                ObjProp::FillPattern(n) => o.fill_pattern = n,
+                _ => {}
+            }
         }
     }
 }

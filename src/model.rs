@@ -464,7 +464,143 @@ pub struct Project {
     /// Color map overrides (`@map color`): index -> (r, g, b).
     pub color_overrides: Vec<(i32, (u8, u8, u8))>,
     pub graphs: Vec<Graph>,
+    /// Annotation string objects (`@with string`).
+    pub strings: Vec<StringObj>,
+    /// Annotation line objects (`@with line`).
+    pub lines: Vec<LineObj>,
+    /// Annotation box objects (`@with box`).
+    pub boxes: Vec<BoxObj>,
+    /// Annotation ellipse objects (`@with ellipse`).
+    pub ellipses: Vec<EllipseObj>,
+    /// Page timestamp (`@timestamp …`). Grace refreshes the text to the
+    /// current time when rendering; we draw the text stored in the file.
+    pub timestamp: StringObj,
 }
+
+/// Annotation string (Grace `plotstr`, defaults from `set_default_string`).
+#[derive(Debug, Clone)]
+pub struct StringObj {
+    pub active: bool,
+    /// `true` = view coordinates, `false` = world coords of graph `gno`.
+    pub loctype_view: bool,
+    /// Graph the object is attached to (used when `loctype` is world).
+    pub gno: usize,
+    pub x: f64,
+    pub y: f64,
+    pub color: i32,
+    /// Rotation angle in degrees, counter-clockwise.
+    pub rot: f64,
+    pub font: i32,
+    /// Grace justification bits: h = just & 3 (0 left, 1 right, 2 center),
+    /// v = just & 12 (0 baseline, 4 bottom, 8 top, 12 middle). `draw.h`.
+    pub just: i32,
+    pub charsize: f64,
+    pub text: String,
+}
+
+impl StringObj {
+    pub fn with_defaults(d: &Defaults) -> Self {
+        StringObj {
+            active: false,
+            loctype_view: true,
+            gno: 0,
+            x: 0.0,
+            y: 0.0,
+            color: d.color,
+            rot: 0.0,
+            font: d.font,
+            just: 0,
+            charsize: d.charsize,
+            text: String::new(),
+        }
+    }
+}
+
+/// Annotation line with optional arrowheads (Grace `linetype`).
+#[derive(Debug, Clone)]
+pub struct LineObj {
+    pub active: bool,
+    pub loctype_view: bool,
+    pub gno: usize,
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+    pub linewidth: f64,
+    pub linestyle: i32,
+    pub color: i32,
+    /// Which ends carry an arrowhead: 0 none, 1 start, 2 end, 3 both.
+    pub arrow_end: i32,
+    /// Arrowhead type: 0 open lines, 1 filled, 2 background-filled.
+    pub arrow_type: i32,
+    /// Arrowhead length factor (view length = `0.01 * length`).
+    pub arrow_length: f64,
+    /// Arrow layout form factors d/L and l/L (`set_default_arrow`: 1.0, 1.0).
+    pub arrow_dl: f64,
+    pub arrow_ll: f64,
+}
+
+impl LineObj {
+    pub fn with_defaults(d: &Defaults) -> Self {
+        LineObj {
+            active: false,
+            loctype_view: true,
+            gno: 0,
+            x1: 0.0,
+            y1: 0.0,
+            x2: 0.0,
+            y2: 0.0,
+            linewidth: d.linewidth,
+            linestyle: d.linestyle,
+            color: d.color,
+            arrow_end: 0,
+            arrow_type: 0,
+            arrow_length: 1.0,
+            arrow_dl: 1.0,
+            arrow_ll: 1.0,
+        }
+    }
+}
+
+/// Annotation rectangle (Grace `boxtype`).
+#[derive(Debug, Clone)]
+pub struct BoxObj {
+    pub active: bool,
+    pub loctype_view: bool,
+    pub gno: usize,
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+    pub linewidth: f64,
+    pub linestyle: i32,
+    pub color: i32,
+    pub fill_color: i32,
+    pub fill_pattern: i32,
+}
+
+impl BoxObj {
+    pub fn with_defaults(d: &Defaults) -> Self {
+        BoxObj {
+            active: false,
+            loctype_view: true,
+            gno: 0,
+            x1: 0.0,
+            y1: 0.0,
+            x2: 0.0,
+            y2: 0.0,
+            linewidth: d.linewidth,
+            linestyle: d.linestyle,
+            color: d.color,
+            fill_color: d.color,
+            fill_pattern: d.pattern,
+        }
+    }
+}
+
+/// Annotation ellipse, inscribed in its bounding rectangle (Grace
+/// `ellipsetype` — same fields as a box).
+pub type EllipseObj = BoxObj;
 
 impl Default for Project {
     fn default() -> Self {
@@ -477,6 +613,16 @@ impl Default for Project {
             defaults: Defaults::default(),
             color_overrides: Vec::new(),
             graphs: Vec::new(),
+            strings: Vec::new(),
+            lines: Vec::new(),
+            boxes: Vec::new(),
+            ellipses: Vec::new(),
+            timestamp: StringObj {
+                // Grace's default timestamp anchor (defaults.cpp).
+                x: 0.03,
+                y: 0.03,
+                ..StringObj::with_defaults(&Defaults::default())
+            },
         }
     }
 }
