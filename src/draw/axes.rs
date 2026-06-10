@@ -210,9 +210,11 @@ fn draw_axis_label(canvas: &mut Canvas, v: &crate::model::View, is_x: bool, axis
         canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color,
             HAlign::Center, VAlign::Top, 0.0);
     } else {
+        // Rotated 90°: baseline alignment puts the text body to the left of the
+        // anchor (away from the axis), so the anchor is the label's near edge.
         let anchor = VPoint { x: v.xmin - offset, y: (v.ymin + v.ymax) / 2.0 };
         canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color,
-            HAlign::Center, VAlign::Top, 90.0);
+            HAlign::Center, VAlign::Baseline, 90.0);
     }
 }
 
