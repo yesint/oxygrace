@@ -30,9 +30,7 @@ pub fn draw_legend(canvas: &mut Canvas, graph: &Graph) {
     let (ax, ay) = if l.loctype_view {
         (l.x, l.y)
     } else {
-        WorldTransform::new(graph)
-            .world_to_view(l.x, l.y)
-            .unwrap_or((l.x, l.y))
+        WorldTransform::new(graph).world_to_view(l.x, l.y)
     };
 
     // Layout metrics (Grace: 0.01 * the respective legend parameters).

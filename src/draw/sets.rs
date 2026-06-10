@@ -57,16 +57,14 @@ fn draw_droplines(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: 
     let n = xs.len().min(ys.len());
     let ybase = baseline_value(graph, set, ys, n);
     for i in 0..n {
-        if let (Some((vx, vyb)), Some((_, vyt))) =
-            (wt.world_to_view(xs[i], ybase), wt.world_to_view(xs[i], ys[i]))
-        {
-            canvas.draw_polyline(
-                &[VPoint { x: vx, y: vyb }, VPoint { x: vx, y: vyt }],
-                set.line_pen.color,
-                set.linewidth,
-                if set.linestyle == 0 { 1 } else { set.linestyle },
-            );
-        }
+        let (vx, vyb) = wt.world_to_view(xs[i], ybase);
+        let (_, vyt) = wt.world_to_view(xs[i], ys[i]);
+        canvas.draw_polyline(
+            &[VPoint { x: vx, y: vyb }, VPoint { x: vx, y: vyt }],
+            set.line_pen.color,
+            set.linewidth,
+            if set.linestyle == 0 { 1 } else { set.linestyle },
+        );
     }
 }
 
@@ -143,11 +141,8 @@ fn draw_one_bar_set(canvas: &mut Canvas, wt: &WorldTransform, set: &Set, offset:
                 (b, b + ys[i])
             }
         };
-        let (Some((bx, by)), Some((tx, ty))) =
-            (wt.world_to_view(xs[i], base_y), wt.world_to_view(xs[i], top_y))
-        else {
-            continue;
-        };
+        let (bx, by) = wt.world_to_view(xs[i], base_y);
+        let (tx, ty) = wt.world_to_view(xs[i], top_y);
         let x1 = bx + offset - bw;
         let x2 = tx + offset + bw;
         let rect = [
@@ -187,12 +182,8 @@ fn draw_set_fill(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &
     }
     let mut pts: Vec<VPoint> = Vec::with_capacity(n + 2);
     for i in 0..n {
-        if let Some((vx, vy)) = wt.world_to_view(xs[i], ys[i]) {
-            pts.push(VPoint { x: vx, y: vy });
-        }
-    }
-    if pts.len() < 2 {
-        return;
+        let (vx, vy) = wt.world_to_view(xs[i], ys[i]);
+        pts.push(VPoint { x: vx, y: vy });
     }
     if set.fill_type == FillType::Baseline {
         // Close the polygon along the baseline between the set's x extent
@@ -202,13 +193,10 @@ fn draw_set_fill(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &
         let xmin = xs[..n].iter().copied().fold(f64::INFINITY, f64::min);
         let xmax = xs[..n].iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let w = &graph.world;
-        if let (Some((vxr, vyb)), Some((vxl, vyb2))) = (
-            wt.world_to_view(xmax.min(w.xmax), ybase),
-            wt.world_to_view(xmin.max(w.xmin), ybase),
-        ) {
-            pts.push(VPoint { x: vxr, y: vyb });
-            pts.push(VPoint { x: vxl, y: vyb2 });
-        }
+        let (vxr, vyb) = wt.world_to_view(xmax.min(w.xmax), ybase);
+        let (vxl, vyb2) = wt.world_to_view(xmin.max(w.xmin), ybase);
+        pts.push(VPoint { x: vxr, y: vyb });
+        pts.push(VPoint { x: vxl, y: vyb2 });
     }
     canvas.fill_polygon_rule(&pts, set.fill_pen.color, set.fill_pen.pattern, set.fill_rule);
 }
@@ -238,34 +226,27 @@ fn draw_set_line(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
         return;
     }
 
-    // Convert points to view coordinates, breaking the line at domain gaps
-    // (e.g. non-positive values on a log axis).
-    let mut segment: Vec<VPoint> = Vec::with_capacity(n);
-    let flush = |seg: &mut Vec<VPoint>, canvas: &mut Canvas| {
-        if seg.len() >= 2 {
-            canvas.draw_polyline(seg, set.line_pen.color, set.linewidth, set.linestyle);
-        }
-        seg.clear();
-    };
-
+    // Convert points to view coordinates. Out-of-domain values (e.g. y <= 0
+    // on a log axis) map to view 0 and the viewport clip trims the segment,
+    // exactly as in Grace (xy_yconv_general + clip_line) — lines are never
+    // broken at domain gaps.
+    let mut segment: Vec<VPoint> = Vec::with_capacity(2 * n);
     for i in 0..n {
-        match wt.world_to_view(xs[i], ys[i]) {
-            Some((vx, vy)) => {
-                let p = VPoint { x: vx, y: vy };
-                // Insert the stair step vertex between consecutive points.
-                if let Some(&prev) = segment.last() {
-                    match set.line_type {
-                        LineType::LeftStair => segment.push(VPoint { x: prev.x, y: p.y }),
-                        LineType::RightStair => segment.push(VPoint { x: p.x, y: prev.y }),
-                        _ => {}
-                    }
-                }
-                segment.push(p);
+        let (vx, vy) = wt.world_to_view(xs[i], ys[i]);
+        let p = VPoint { x: vx, y: vy };
+        // Insert the stair step vertex between consecutive points.
+        if let Some(&prev) = segment.last() {
+            match set.line_type {
+                LineType::LeftStair => segment.push(VPoint { x: prev.x, y: p.y }),
+                LineType::RightStair => segment.push(VPoint { x: p.x, y: prev.y }),
+                _ => {}
             }
-            None => flush(&mut segment, canvas),
         }
+        segment.push(p);
     }
-    flush(&mut segment, canvas);
+    if segment.len() >= 2 {
+        canvas.draw_polyline(&segment, set.line_pen.color, set.linewidth, set.linestyle);
+    }
 }
 
 /// Draw the plot symbol at each data point of a set.
@@ -304,9 +285,7 @@ fn draw_set_symbols(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set
         if xs[i] < wx0 || xs[i] > wx1 || ys[i] < wy0 || ys[i] > wy1 {
             continue;
         }
-        let Some((vx, vy)) = wt.world_to_view(xs[i], ys[i]) else {
-            continue;
-        };
+        let (vx, vy) = wt.world_to_view(xs[i], ys[i]);
         // Symbol radius in view units (Grace: 0.01 * symsize).
         let r = match zsize {
             Some(z) if graph.znorm != 0.0 => 0.01 * (z.get(i).copied().unwrap_or(0.0) / graph.znorm),

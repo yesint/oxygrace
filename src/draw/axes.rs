@@ -153,11 +153,9 @@ fn tick_label_extent(canvas: &Canvas, is_x: bool, majors: &[f64], axis: &Axis) -
 /// Map a tick value to its view position on the axis (returns view x and y).
 fn tick_view_pos(wt: &WorldTransform, v: &crate::model::View, is_x: bool, t: f64) -> Option<VPoint> {
     if is_x {
-        let vx = wt.x_to_view(t)?;
-        Some(VPoint { x: vx, y: v.ymin })
+        Some(VPoint { x: wt.x_to_view(t), y: v.ymin })
     } else {
-        let vy = wt.y_to_view(t)?;
-        Some(VPoint { x: v.xmin, y: vy })
+        Some(VPoint { x: v.xmin, y: wt.y_to_view(t) })
     }
 }
 
@@ -200,10 +198,10 @@ fn draw_grid_line(
     ls: i32,
 ) {
     if is_x {
-        let Some(vx) = wt.x_to_view(t) else { return };
+        let vx = wt.x_to_view(t);
         canvas.draw_polyline(&[VPoint { x: vx, y: v.ymin }, VPoint { x: vx, y: v.ymax }], color, lw, ls);
     } else {
-        let Some(vy) = wt.y_to_view(t) else { return };
+        let vy = wt.y_to_view(t);
         canvas.draw_polyline(&[VPoint { x: v.xmin, y: vy }, VPoint { x: v.xmax, y: vy }], color, lw, ls);
     }
 }
@@ -219,12 +217,12 @@ fn draw_tick_label(
 ) {
     let label = format!("{}{}{}", axis.tl_prepend, format_value(t, axis.tl_format, axis.tl_prec), axis.tl_append);
     if is_x {
-        let Some(vx) = wt.x_to_view(t) else { return };
+        let vx = wt.x_to_view(t);
         let anchor = VPoint { x: vx, y: v.ymin - tl_base };
         canvas.draw_text(anchor, &label, axis.tl_charsize, axis.tl_font, axis.tl_color,
             HAlign::Center, VAlign::Top, axis.tl_angle as f64);
     } else {
-        let Some(vy) = wt.y_to_view(t) else { return };
+        let vy = wt.y_to_view(t);
         let anchor = VPoint { x: v.xmin - tl_base, y: vy };
         canvas.draw_text(anchor, &label, axis.tl_charsize, axis.tl_font, axis.tl_color,
             HAlign::Right, VAlign::Middle, axis.tl_angle as f64);

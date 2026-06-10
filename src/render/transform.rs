@@ -144,41 +144,40 @@ impl WorldTransform {
         }
     }
 
-    /// World point to view point, or `None` if out of a log/etc. domain.
-    pub fn world_to_view(&self, wx: f64, wy: f64) -> Option<(f64, f64)> {
-        let sx = scale_fwd(self.xscale, wx)?;
-        let sy = scale_fwd(self.yscale, wy)?;
-        let mut fx = (sx - self.sx0) / (self.sx1 - self.sx0);
-        let mut fy = (sy - self.sy0) / (self.sy1 - self.sy0);
-        if self.xinvert {
-            fx = 1.0 - fx;
-        }
-        if self.yinvert {
-            fy = 1.0 - fy;
-        }
-        Some((
-            self.vx0 + fx * (self.vx1 - self.vx0),
-            self.vy0 + fy * (self.vy1 - self.vy0),
-        ))
+    /// World point to view point.
+    ///
+    /// A value outside its scale's domain (e.g. y <= 0 on a log axis) maps to
+    /// view coordinate **0** for that axis, exactly like Grace's
+    /// `xy_xconv_general` / `xy_yconv_general` (`draw.cpp`); the viewport clip
+    /// then trims whatever geometry reaches toward the page corner. Grace
+    /// never skips such points.
+    pub fn world_to_view(&self, wx: f64, wy: f64) -> (f64, f64) {
+        (self.x_to_view(wx), self.y_to_view(wy))
     }
 
-    /// Map a world X value to its view X coordinate (ignores domain errors).
-    pub fn x_to_view(&self, wx: f64) -> Option<f64> {
-        let sx = scale_fwd(self.xscale, wx)?;
+    /// Map a world X value to its view X coordinate (0 if out of domain,
+    /// per Grace `xy_xconv_general`).
+    pub fn x_to_view(&self, wx: f64) -> f64 {
+        let Some(sx) = scale_fwd(self.xscale, wx) else {
+            return 0.0;
+        };
         let mut fx = (sx - self.sx0) / (self.sx1 - self.sx0);
         if self.xinvert {
             fx = 1.0 - fx;
         }
-        Some(self.vx0 + fx * (self.vx1 - self.vx0))
+        self.vx0 + fx * (self.vx1 - self.vx0)
     }
 
-    /// Map a world Y value to its view Y coordinate (ignores domain errors).
-    pub fn y_to_view(&self, wy: f64) -> Option<f64> {
-        let sy = scale_fwd(self.yscale, wy)?;
+    /// Map a world Y value to its view Y coordinate (0 if out of domain,
+    /// per Grace `xy_yconv_general`).
+    pub fn y_to_view(&self, wy: f64) -> f64 {
+        let Some(sy) = scale_fwd(self.yscale, wy) else {
+            return 0.0;
+        };
         let mut fy = (sy - self.sy0) / (self.sy1 - self.sy0);
         if self.yinvert {
             fy = 1.0 - fy;
         }
-        Some(self.vy0 + fy * (self.vy1 - self.vy0))
+        self.vy0 + fy * (self.vy1 - self.vy0)
     }
 }

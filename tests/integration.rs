@@ -70,11 +70,11 @@ fn world_to_view_linear() {
     graph.yscale = ScaleType::Normal;
     let wt = WorldTransform::new(&graph);
     // Midpoint of world maps to midpoint of view.
-    let (vx, vy) = wt.world_to_view(5.0, 50.0).unwrap();
+    let (vx, vy) = wt.world_to_view(5.0, 50.0);
     assert!((vx - 0.5).abs() < 1e-9);
     assert!((vy - 0.5).abs() < 1e-9);
     // Corners.
-    let (vx, vy) = wt.world_to_view(0.0, 0.0).unwrap();
+    let (vx, vy) = wt.world_to_view(0.0, 0.0);
     assert!((vx - 0.2).abs() < 1e-9 && (vy - 0.1).abs() < 1e-9);
 }
 
