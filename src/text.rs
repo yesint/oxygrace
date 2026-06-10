@@ -142,7 +142,12 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
                     }
                     'R' => {
                         flushcur!();
-                        color = a.parse::<i32>().ok();
+                        // Numeric index or a color name (WriteString falls
+                        // back to get_color_by_name); \R{} resets.
+                        color = a
+                            .parse::<i32>()
+                            .ok()
+                            .or_else(|| crate::color::index_by_name(a));
                     }
                     // \z{x} multiplies the size; \z{} resets it (t1fonts.cpp).
                     'z' => {

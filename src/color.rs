@@ -46,6 +46,30 @@ impl Rgba {
 }
 
 /// Resolve a color index to RGBA, honoring `@map color` overrides and falling
+/// Default color index for a Grace color name (`cmap_init` names,
+/// draw.cpp); used by the `\\R{name}` text escape.
+pub fn index_by_name(name: &str) -> Option<i32> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "white" => 0,
+        "black" => 1,
+        "red" => 2,
+        "green" => 3,
+        "blue" => 4,
+        "yellow" => 5,
+        "brown" => 6,
+        "grey" | "gray" => 7,
+        "violet" => 8,
+        "cyan" => 9,
+        "magenta" => 10,
+        "orange" => 11,
+        "indigo" => 12,
+        "maroon" => 13,
+        "turquoise" => 14,
+        "green4" => 15,
+        _ => return None,
+    })
+}
+
 /// back to the default colormap. Out-of-range indices resolve to black.
 pub fn resolve(project: &Project, index: i32) -> Rgba {
     if let Some(&(_, (r, g, b))) = project

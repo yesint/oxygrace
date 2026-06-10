@@ -88,6 +88,16 @@ pub enum AxisProp {
     TlAppend(String),
     TlPrepend(String),
     TlSkip(i32),
+    /// `tick spec type none|ticks|both` -> 0/1/2 (also the old
+    /// `tick type spec` / `ticklabel type spec` forms).
+    SpecType(i32),
+    /// Old `tick type spec`: positions are specified (keep BOTH if set).
+    SpecMarksOld,
+    /// Old `ticklabel type auto`: drop BOTH back to MARKS.
+    SpecLabelsAutoOld,
+    SpecCount(usize),
+    SpecPos { idx: usize, pos: f64, major: bool },
+    SpecLabel { idx: usize, label: String },
     TlStartSpec(bool),
     TlStart(f64),
     TlStopSpec(bool),
@@ -492,6 +502,14 @@ peg::parser! {
             / kw("in") { AxisProp::TicksDir(true) }
             / kw("out") { AxisProp::TicksDir(false) }
             / kw("both") { AxisProp::Ignored }
+            / kw("spec") __ kw("type") __ t:(
+                  kw("none") { 0 } / kw("ticks") { 1 } / kw("both") { 2 }
+              ) { AxisProp::SpecType(t) }
+            / kw("spec") __ n:uint() { AxisProp::SpecCount(n) }
+            / kw("type") __ kw("spec") { AxisProp::SpecMarksOld }
+            / kw("type") __ kw("auto") { AxisProp::SpecType(0) }
+            / kw("major") __ i:uint() comma() v:num() { AxisProp::SpecPos { idx: i, pos: v, major: true } }
+            / kw("minor") __ i:uint() comma() v:num() { AxisProp::SpecPos { idx: i, pos: v, major: false } }
             / kw("major") __ p:tick_level(true) { AxisProp::Major(p) }
             / kw("minor") __ kw("ticks") __ n:iflex() { AxisProp::MinorTicks(n) }
             / kw("minor") __ p:tick_level(false) { AxisProp::Minor(p) }
@@ -509,7 +527,12 @@ peg::parser! {
             / n:num() {? if allow_spacing { Ok(TickLevelProp::Spacing(n)) } else { Err("minor spacing") } }
 
         rule axis_ticklabel() -> AxisProp
-            = b:onoff() { AxisProp::TlActive(b) }
+            // The spec form must precede onoff(): a bare "0" would otherwise
+            // commit the PEG choice on "ticklabel 0, \"label\"" lines.
+            = i:uint() comma() s:qstring() { AxisProp::SpecLabel { idx: i, label: s } }
+            / b:onoff() { AxisProp::TlActive(b) }
+            / kw("type") __ kw("spec") { AxisProp::SpecType(2) }
+            / kw("type") __ kw("auto") { AxisProp::SpecLabelsAutoOld }
             / kw("prec") __ n:iflex() { AxisProp::TlPrec(n) }
             / kw("skip") __ n:iflex() { AxisProp::TlSkip(n) }
             / kw("format") __ w:word() {

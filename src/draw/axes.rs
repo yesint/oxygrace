@@ -40,16 +40,40 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
     };
 
     let scale = if is_x { graph.xscale } else { graph.yscale };
-    let grid = tick_grid(
-        wmin,
-        wmax,
-        scale,
-        axis.major,
-        axis.minor_ticks,
-        axis.autonum,
-        axis.tick_round,
-    );
-    let (majors, minors) = (grid.majors, grid.minors);
+    // Specified ticks (TICKS_SPEC_MARKS/BOTH) replace the generated grid;
+    // out-of-window positions are skipped like in Grace's draw loops.
+    let (majors, minors) = if axis.spec_type != 0 {
+        let n = if axis.spec_count > 0 {
+            axis.spec_count.min(axis.spec_ticks.len())
+        } else {
+            axis.spec_ticks.len()
+        };
+        let (lo, hi) = (wmin.min(wmax), wmin.max(wmax));
+        let inside = |p: f64| p >= lo - 1e-9 * (hi - lo) && p <= hi + 1e-9 * (hi - lo);
+        let mut majors = Vec::new();
+        let mut minors = Vec::new();
+        for t in &axis.spec_ticks[..n] {
+            if inside(t.pos) {
+                if t.major {
+                    majors.push(t.pos);
+                } else {
+                    minors.push(t.pos);
+                }
+            }
+        }
+        (majors, minors)
+    } else {
+        let grid = tick_grid(
+            wmin,
+            wmax,
+            scale,
+            axis.major,
+            axis.minor_ticks,
+            axis.autonum,
+            axis.tick_round,
+        );
+        (grid.majors, grid.minors)
+    };
 
     // Grid lines first so ticks/data sit on top.
     if axis.major_props.grid {
@@ -128,6 +152,26 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
     }
 }
 
+/// Text of the label at major tick `t`: the specified label when the axis
+/// uses TICKS_SPEC_BOTH, otherwise the formatted value with pre/append.
+fn tick_label_text(axis: &Axis, t: f64) -> String {
+    if axis.spec_type == 2 {
+        let hit = axis
+            .spec_ticks
+            .iter()
+            .find(|s| (s.pos - t).abs() <= 1e-9 * (1.0 + t.abs()));
+        if let Some(l) = hit.and_then(|s| s.label.as_ref()) {
+            return l.clone();
+        }
+    }
+    format!(
+        "{}{}{}",
+        axis.tl_prepend,
+        format_value(t, axis.tl_format, axis.tl_prec),
+        axis.tl_append
+    )
+}
+
 /// Whether a tick at world value `t` gets a label, honoring spec start/stop
 /// bounds (Grace `drawticks.cpp`: skip if `t < tl_start` or `t > tl_stop`),
 /// with a small tolerance so the boundary ticks themselves are kept.
@@ -149,12 +193,7 @@ fn tick_label_extent(canvas: &Canvas, is_x: bool, majors: &[f64], axis: &Axis) -
     majors
         .iter()
         .map(|&t| {
-            let s = format!(
-                "{}{}{}",
-                axis.tl_prepend,
-                format_value(t, axis.tl_format, axis.tl_prec),
-                axis.tl_append
-            );
+            let s = tick_label_text(axis, t);
             let (x0, y0, x1, y1) = canvas.text_bbox_view(&s, axis.tl_charsize, axis.tl_font);
             if is_x {
                 y1 - y0
@@ -230,7 +269,7 @@ fn draw_tick_label(
     tl_base: f64,
     axis: &Axis,
 ) {
-    let label = format!("{}{}{}", axis.tl_prepend, format_value(t, axis.tl_format, axis.tl_prec), axis.tl_append);
+    let label = tick_label_text(axis, t);
     if is_x {
         let vx = wt.x_to_view(t);
         let anchor = VPoint { x: vx, y: v.ymin - tl_base };

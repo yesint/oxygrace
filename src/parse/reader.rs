@@ -462,6 +462,29 @@ fn apply_axis(axis: &mut crate::model::Axis, prop: AxisProp) {
         AxisProp::TlActive(b) => axis.ticklabels = b,
         AxisProp::TlPrec(n) => axis.tl_prec = n,
         AxisProp::TlSkip(n) => axis.tl_skip = n.max(0),
+        AxisProp::SpecType(t) => axis.spec_type = t,
+        // Old "tick type spec": positions specified; keep BOTH if labels
+        // were already specified (pars.yacc tickattr TYPE SPEC).
+        AxisProp::SpecMarksOld => {
+            if axis.spec_type != 2 {
+                axis.spec_type = 1;
+            }
+        }
+        // Old "ticklabel type auto": labels revert to generated.
+        AxisProp::SpecLabelsAutoOld => {
+            if axis.spec_type == 2 {
+                axis.spec_type = 1;
+            }
+        }
+        AxisProp::SpecCount(n) => axis.spec_count = n,
+        AxisProp::SpecPos { idx, pos, major } => {
+            let t = axis.spec_tick_mut(idx);
+            t.pos = pos;
+            t.major = major;
+        }
+        AxisProp::SpecLabel { idx, label } => {
+            axis.spec_tick_mut(idx).label = Some(label);
+        }
         AxisProp::TlFormat(f) => axis.tl_format = f,
         AxisProp::TlFont(n) => axis.tl_font = n,
         AxisProp::TlColor(n) => axis.tl_color = n,

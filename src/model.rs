@@ -141,6 +141,14 @@ pub struct Axis {
     /// still drawn at every position.
     /// Label every (skip+1)-th major tick (`ticklabel skip`).
     pub tl_skip: i32,
+    /// Specified ticks (Grace `TICKS_SPEC_*`): 0 = generated, 1 = positions
+    /// from `spec_ticks`, 2 = positions and labels from `spec_ticks`.
+    pub spec_type: i32,
+    /// Number of specified ticks in use (`tick spec N`).
+    pub spec_count: usize,
+    /// Index-addressed specified ticks (`tick major IDX, POS`,
+    /// `ticklabel IDX, "label"`).
+    pub spec_ticks: Vec<SpecTick>,
     pub tl_start_spec: bool,
     pub tl_start: f64,
     pub tl_stop_spec: bool,
@@ -180,11 +188,34 @@ impl Default for Axis {
             tl_prepend: String::new(),
             tl_append: String::new(),
             tl_skip: 0,
+            spec_type: 0,
+            spec_count: 0,
+            spec_ticks: Vec::new(),
             tl_start_spec: false,
             tl_start: 0.0,
             tl_stop_spec: false,
             tl_stop: 0.0,
         }
+    }
+}
+
+/// One explicitly specified tick (Grace `tloc[]`).
+#[derive(Debug, Clone, Default)]
+pub struct SpecTick {
+    pub pos: f64,
+    /// Major (true) or minor tick mark.
+    pub major: bool,
+    /// Custom label (used when the axis `spec_type` is 2).
+    pub label: Option<String>,
+}
+
+impl Axis {
+    /// Mutable spec tick at `idx`, growing the list as needed.
+    pub fn spec_tick_mut(&mut self, idx: usize) -> &mut SpecTick {
+        while self.spec_ticks.len() <= idx {
+            self.spec_ticks.push(SpecTick::default());
+        }
+        &mut self.spec_ticks[idx]
     }
 }
 
