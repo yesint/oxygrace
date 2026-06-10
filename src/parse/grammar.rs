@@ -113,6 +113,7 @@ pub enum SetProp {
     Linewidth(f64),  // legacy
     Linestyle(i32),  // legacy
     FillType(i32),
+    FillRule(i32),
     FillColor(i32),
     FillPattern(i32),
     BaselineType(i32),
@@ -456,6 +457,7 @@ peg::parser! {
 
         rule set_fill() -> SetProp
             = kw("type") __ n:iflex() { SetProp::FillType(n) }
+            / kw("rule") __ n:iflex() { SetProp::FillRule(n) }
             / kw("color") __ n:iflex() { SetProp::FillColor(n) }
             / kw("pattern") __ n:iflex() { SetProp::FillPattern(n) }
             / n:iflex() { SetProp::FillType(n) } // legacy "fill 1"

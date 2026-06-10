@@ -344,6 +344,8 @@ pub struct Set {
 
     pub fill_type: FillType,
     pub fill_pen: Pen,
+    /// Polygon fill rule: 0 = winding, 1 = even-odd (Grace `FILLRULE_*`).
+    pub fill_rule: i32,
     /// Baseline reference for baseline fills (0 = y=0, see Grace `setybase`).
     pub baseline_type: i32,
     /// Draw a vertical line from each point down to the baseline.
@@ -376,6 +378,7 @@ impl Set {
             linewidth: d.linewidth,
             fill_type: FillType::None,
             fill_pen: pen,
+            fill_rule: 0,
             baseline_type: 0,
             dropline: false,
         }

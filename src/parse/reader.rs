@@ -363,6 +363,7 @@ fn apply_set(set: &mut crate::model::Set, prop: SetProp) {
         }
         SetProp::FillColor(n) => set.fill_pen.color = n,
         SetProp::FillPattern(n) => set.fill_pen.pattern = n,
+        SetProp::FillRule(n) => set.fill_rule = n,
         SetProp::BaselineType(n) => set.baseline_type = n,
         SetProp::Dropline(b) => set.dropline = b,
         SetProp::Legend(s) => set.legend = s,

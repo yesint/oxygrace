@@ -15,8 +15,15 @@ const SQRT1_3: f64 = 0.577_350_269_189_625_8;
 const SQRT1_2: f64 = std::f64::consts::FRAC_1_SQRT_2;
 
 /// Draw every visible set of a graph: connecting line, then symbols.
+///
+/// Clipping mirrors Grace's `plotone.cpp`: fills, lines, droplines and bars
+/// are drawn with clipping to the graph viewport (`setclipping(TRUE)`), while
+/// symbols are drawn unclipped (`drawsetsyms` calls `setclipping(FALSE)`) but
+/// skip data points outside the world window (`is_validWPoint`).
 pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
     let wt = WorldTransform::new(graph);
+    let v = graph.view;
+    canvas.set_clip_view(v.xmin, v.ymin, v.xmax, v.ymax);
     // Bars are drawn first (as a grouped pass) so lines/symbols sit on top.
     draw_bars(canvas, &wt, graph);
 
@@ -34,9 +41,12 @@ pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
         }
         if !is_bar(set.set_type) {
             draw_set_line(canvas, &wt, set);
+            canvas.clear_clip();
             draw_set_symbols(canvas, &wt, graph, set);
+            canvas.set_clip_view(v.xmin, v.ymin, v.xmax, v.ymax);
         }
     }
+    canvas.clear_clip();
 }
 
 /// Draw vertical droplines from each point down to the set's baseline.
@@ -185,18 +195,22 @@ fn draw_set_fill(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &
         return;
     }
     if set.fill_type == FillType::Baseline {
-        // Close the polygon back along the baseline y between the x extents.
+        // Close the polygon along the baseline between the set's x extent
+        // clamped to the world window: Grace `drawsetfill` (plotone.cpp)
+        // appends (MIN2(xmax, w.xg2), ybase) then (MAX2(xmin, w.xg1), ybase).
         let ybase = baseline_value(graph, set, ys, n);
-        let (x_first, x_last) = (xs[0], xs[n - 1]);
-        if let (Some((vxl, vyb)), Some((vxr, _))) =
-            (wt.world_to_view(x_last, ybase), wt.world_to_view(x_first, ybase))
-        {
-            pts.push(VPoint { x: vxl, y: vyb });
-            let vyb2 = wt.y_to_view(ybase).unwrap_or(vyb);
-            pts.push(VPoint { x: vxr, y: vyb2 });
+        let xmin = xs[..n].iter().copied().fold(f64::INFINITY, f64::min);
+        let xmax = xs[..n].iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let w = &graph.world;
+        if let (Some((vxr, vyb)), Some((vxl, vyb2))) = (
+            wt.world_to_view(xmax.min(w.xmax), ybase),
+            wt.world_to_view(xmin.max(w.xmin), ybase),
+        ) {
+            pts.push(VPoint { x: vxr, y: vyb });
+            pts.push(VPoint { x: vxl, y: vyb2 });
         }
     }
-    canvas.fill_polygon(&pts, set.fill_pen.color, set.fill_pen.pattern);
+    canvas.fill_polygon_rule(&pts, set.fill_pen.color, set.fill_pen.pattern, set.fill_rule);
 }
 
 /// Baseline Y value for baseline fills (Grace `setybase`).
@@ -278,7 +292,18 @@ fn draw_set_symbols(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set
     let do_fill = set.symbol_fill.pattern != 0;
     let do_outline = set.symbol_linestyle != 0;
 
+    // World window for the point-inside test (Grace `is_validWPoint`).
+    let w = &graph.world;
+    let (wx0, wx1) = (w.xmin.min(w.xmax), w.xmin.max(w.xmax));
+    let (wy0, wy1) = (w.ymin.min(w.ymax), w.ymin.max(w.ymax));
+
     for i in 0..n {
+        // Grace skips symbols whose data point lies outside the world window
+        // (`drawsetsyms` -> `is_validWPoint`); symbols are not clipped, so one
+        // sitting on the frame edge may overhang it, exactly as in Grace.
+        if xs[i] < wx0 || xs[i] > wx1 || ys[i] < wy0 || ys[i] > wy1 {
+            continue;
+        }
         let Some((vx, vy)) = wt.world_to_view(xs[i], ys[i]) else {
             continue;
         };

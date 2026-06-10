@@ -4,7 +4,7 @@
 //! color map here.
 
 use tiny_skia::{
-    FillRule, FilterQuality, LineCap, LineJoin, Paint, Path, PathBuilder, Pattern, Pixmap,
+    FillRule, FilterQuality, LineCap, LineJoin, Mask, Paint, Path, PathBuilder, Pattern, Pixmap,
     SpreadMode, Stroke, StrokeDash, Transform,
 };
 
@@ -71,6 +71,11 @@ pub struct Canvas<'a> {
     page: PageTransform,
     project: &'a Project,
     fonts: &'a FontSet,
+    /// Active clip region (device-space mask), or `None` for unclipped
+    /// drawing. Mirrors Grace's `setclipping` + per-graph `viewport` clip in
+    /// `draw.cpp` (`clip_line`/`clip_polygon`): data elements are clipped to
+    /// the graph viewport, decorations are not.
+    clip: Option<Mask>,
 }
 
 impl<'a> Canvas<'a> {
@@ -84,7 +89,33 @@ impl<'a> Canvas<'a> {
             page: PageTransform::new(project.page_width, project.page_height),
             project,
             fonts,
+            clip: None,
         }
+    }
+
+    /// Clip subsequent drawing to a rectangle in view coordinates, expanded by
+    /// Grace's `VP_EPSILON = 0.0001` slack (`draw.cpp`). Pass the graph
+    /// viewport before drawing data; call [`Canvas::clear_clip`] afterwards.
+    pub fn set_clip_view(&mut self, xmin: f64, ymin: f64, xmax: f64, ymax: f64) {
+        const VP_EPSILON: f64 = 0.0001; // draw.cpp:799
+        let (x0, y0) = self
+            .page
+            .view_to_device(xmin - VP_EPSILON, ymax + VP_EPSILON);
+        let (x1, y1) = self
+            .page
+            .view_to_device(xmax + VP_EPSILON, ymin - VP_EPSILON);
+        let mut mask = Mask::new(self.pixmap.width(), self.pixmap.height())
+            .expect("non-zero page dimensions");
+        if let Some(rect) = tiny_skia::Rect::from_ltrb(x0, y0, x1, y1) {
+            let path = PathBuilder::from_rect(rect);
+            mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
+        }
+        self.clip = Some(mask);
+    }
+
+    /// Disable clipping (Grace `setclipping(FALSE)`).
+    pub fn clear_clip(&mut self) {
+        self.clip = None;
     }
 
     /// Access the page transform (for size conversions in the draw layer).
@@ -136,12 +167,18 @@ impl<'a> Canvas<'a> {
         paint.anti_alias = true;
         let stroke = self.stroke(linestyle, self.page.linewidth_px(linewidth));
         self.pixmap
-            .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            .stroke_path(&path, &paint, &stroke, Transform::identity(), self.clip.as_ref());
     }
 
     /// Fill a closed polygon (view coords) with a color index and fill pattern.
     /// Pattern 0 = no fill, 1 = solid, 2..=31 = a tiled hatch in `color`.
     pub fn fill_polygon(&mut self, pts: &[VPoint], color: i32, pattern: i32) {
+        self.fill_polygon_rule(pts, color, pattern, 0);
+    }
+
+    /// Like [`Canvas::fill_polygon`] with an explicit fill rule
+    /// (0 = winding, 1 = even-odd; Grace `setfillrule` in `drawsetfill`).
+    pub fn fill_polygon_rule(&mut self, pts: &[VPoint], color: i32, pattern: i32, rule: i32) {
         if pts.len() < 3 {
             return;
         }
@@ -156,11 +193,21 @@ impl<'a> Canvas<'a> {
         }
         pb.close();
         let Some(path) = pb.finish() else { return };
-        self.fill_path_pen(&path, color, pattern);
+        let rule = if rule == 1 {
+            FillRule::EvenOdd
+        } else {
+            FillRule::Winding
+        };
+        self.fill_path_rule(&path, color, pattern, rule);
     }
 
     /// Fill a path with a color index and fill pattern (shared by all fills).
     fn fill_path_pen(&mut self, path: &Path, color: i32, pattern: i32) {
+        self.fill_path_rule(path, color, pattern, FillRule::Winding);
+    }
+
+    /// Fill a path with a color index, fill pattern and explicit fill rule.
+    fn fill_path_rule(&mut self, path: &Path, color: i32, pattern: i32, rule: FillRule) {
         if pattern == 0 {
             return;
         }
@@ -172,7 +219,7 @@ impl<'a> Canvas<'a> {
         if pattern == 1 {
             paint.set_color(rgba.to_skia());
             self.pixmap
-                .fill_path(path, &paint, FillRule::Winding, Transform::identity(), None);
+                .fill_path(path, &paint, rule, Transform::identity(), self.clip.as_ref());
             return;
         }
         // Hatched pattern: tile a 16x16 stencil in the foreground color.
@@ -180,7 +227,7 @@ impl<'a> Canvas<'a> {
             // Unknown pattern -> fall back to solid.
             paint.set_color(rgba.to_skia());
             self.pixmap
-                .fill_path(path, &paint, FillRule::Winding, Transform::identity(), None);
+                .fill_path(path, &paint, rule, Transform::identity(), self.clip.as_ref());
             return;
         };
         paint.shader = Pattern::new(
@@ -191,7 +238,7 @@ impl<'a> Canvas<'a> {
             Transform::identity(),
         );
         self.pixmap
-            .fill_path(path, &paint, FillRule::Winding, Transform::identity(), None);
+            .fill_path(path, &paint, rule, Transform::identity(), self.clip.as_ref());
     }
 
     /// Width of a marked-up string in view units, at the given char size.
@@ -259,7 +306,7 @@ impl<'a> Canvas<'a> {
         paint.anti_alias = true;
         let stroke = self.stroke(ls, self.page.linewidth_px(lw));
         self.pixmap
-            .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            .stroke_path(&path, &paint, &stroke, Transform::identity(), self.clip.as_ref());
     }
 
     /// Draw a marked-up string anchored at a view point.
