@@ -190,7 +190,16 @@ fn flush_data(project: &mut Project, cur: &mut Cursor) {
 fn apply(project: &mut Project, cur: &mut Cursor, cmd: Command) {
     match cmd {
         Command::Unknown => {}
-        Command::Version(v) => cur.version = v,
+        Command::Version(v) => {
+            cur.version = v;
+            // Grace switches the font-id mapping when @version is read
+            // (pars.yacc): old files use the ACE/gr order with Symbol at 8.
+            project.font_map = if v < 50001 {
+                crate::font::FONT_MAP_ACEGR
+            } else {
+                crate::font::FONT_MAP_DEFAULT
+            };
+        }
         Command::PageSize(w, h) => {
             if w >= 1.0 && h >= 1.0 {
                 project.page_width = w.round() as u32;
@@ -260,6 +269,13 @@ fn apply(project: &mut Project, cur: &mut Cursor, cmd: Command) {
         Command::MapColor { index, rgb } => {
             project.color_overrides.retain(|&(i, _)| i != index);
             project.color_overrides.push((index, rgb));
+        }
+        Command::MapFont { slot, name } => {
+            if slot < project.font_map.len() {
+                if let Some(face) = crate::font::face_by_name(&name) {
+                    project.font_map[slot] = face;
+                }
+            }
         }
         Command::WithObject(kind) => {
             // `@with string|line|box|ellipse` opens a new object. New-format
@@ -483,6 +499,8 @@ fn apply_set(set: &mut crate::model::Set, prop: SetProp) {
         SetProp::SymbolFillColor(n) => set.symbol_fill.color = n,
         SetProp::SymbolFillPattern(n) => set.symbol_fill.pattern = n,
         SetProp::SymbolLinewidth(n) => set.symbol_linewidth = n,
+        SetProp::SymbolChar(n) => set.symbol_char = n.clamp(0, 255) as u8,
+        SetProp::SymbolCharFont(n) => set.symbol_char_font = n,
         SetProp::SymbolLinestyle(n) => set.symbol_linestyle = n,
         SetProp::LineType(n) => set.line_type = LineType::from_code(n),
         SetProp::LineColor(n) => set.line_pen.color = n,

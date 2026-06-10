@@ -243,7 +243,7 @@ impl<'a> Canvas<'a> {
 
     /// Width of a marked-up string in view units, at the given char size.
     pub fn text_width_view(&self, s: &str, charsize: f64, font: i32) -> f64 {
-        let em = text::measure(self.fonts, s, font) as f64;
+        let em = text::measure(self.fonts, s, font, &self.project.font_map) as f64;
         // em units -> view: one em at `charsize` spans charsize*MAGIC_FONT_SCALE.
         em * charsize * crate::render::transform::MAGIC_FONT_SCALE
     }
@@ -258,7 +258,7 @@ impl<'a> Canvas<'a> {
     /// strings give a zero box. Built from the positioned glyph outlines,
     /// mirroring Grace's `update_bbox`.
     pub fn text_bbox_view(&self, s: &str, charsize: f64, font: i32) -> (f64, f64, f64, f64) {
-        match text::bbox(self.fonts, s, font) {
+        match text::bbox(self.fonts, s, font, &self.project.font_map) {
             Some((x0, y0, x1, y1)) => {
                 let e = self.em_view(charsize);
                 (x0 as f64 * e, y0 as f64 * e, x1 as f64 * e, y1 as f64 * e)
@@ -357,7 +357,7 @@ impl<'a> Canvas<'a> {
         if s.is_empty() {
             return;
         }
-        let layout = text::layout(self.fonts, s, base_font);
+        let layout = text::layout(self.fonts, s, base_font, &self.project.font_map);
         if layout.glyphs.is_empty() {
             return;
         }
@@ -437,6 +437,35 @@ impl<'a> Canvas<'a> {
             paint.anti_alias = true;
             self.pixmap
                 .fill_path(&tpath, &paint, FillRule::Winding, Transform::identity(), None);
+        }
+
+        // Under/overline rules from \u / \o markup, as rectangles in the
+        // rotated text frame.
+        for r in &layout.rules {
+            let (x0, x1) = (r.x0, r.x1);
+            let (yb, yt) = (r.y, r.y + r.thickness);
+            let corners = [(x0, yb), (x1, yb), (x1, yt), (x0, yt)];
+            let mut pb = PathBuilder::new();
+            for (i, (cx, cy)) in corners.iter().enumerate() {
+                let px = ax + em_px * ((cx * cos - cy * sin) - fx);
+                let py = ay - em_px * ((cx * sin + cy * cos) - fy);
+                if i == 0 {
+                    pb.move_to(px, py);
+                } else {
+                    pb.line_to(px, py);
+                }
+            }
+            pb.close();
+            let Some(path) = pb.finish() else { continue };
+            let mut paint = Paint::default();
+            let col = match r.color {
+                Some(idx) => color::resolve(self.project, idx).to_skia(),
+                None => default_color,
+            };
+            paint.set_color(col);
+            paint.anti_alias = true;
+            self.pixmap
+                .fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
         }
     }
 }

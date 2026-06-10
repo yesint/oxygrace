@@ -1,21 +1,22 @@
 //! Grace string markup parsing and layout.
 //!
-//! Grace strings embed formatting escapes introduced by `\`. This module turns
-//! a marked-up UTF-8 string into a sequence of [`StyledRun`]s (runs of plain
-//! text sharing a font, scale, baseline shift and optional color), then lays
-//! them out into positioned glyphs.
-//!
-//! Milestone 1 supports the common escapes: `\f{n}` / `\digit` (font),
-//! `\x` (symbol font), `\s` / `\S` / `\N` (sub/superscript/normal),
-//! `\+` / `\-` (enlarge/shrink), `\R{n}` (color) and `\\`. Unknown escapes are
-//! dropped. This keeps plain text and the typical sub/superscripts correct
-//! while ignoring the rarer typographic controls.
+//! Grace strings embed formatting escapes introduced by `\`. This module is a
+//! literal port of the escape semantics of QtGrace's `WriteString`
+//! (`t1fonts.cpp`): per-character state of font, size scale, baseline /
+//! vertical shift, color, upper-half charset, under/overline, plus pen marks
+//! and explicit shifts. The laid-out glyph list (em units of the base size)
+//! is consumed by the canvas, which positions the whole block by its rendered
+//! bounding box.
 
-use crate::font::FontSet;
+use crate::font::{FontMap, FontSet};
 
-const SSCRIPT_SCALE: f32 = 0.6;
-const SSCRIPT_SHIFT: f32 = 0.4;
-const ENLARGE: f32 = 1.19;
+/// `SSCRIPT_SCALE` (t1fonts.h): size factor applied by `\s`/`\S`.
+const SSCRIPT_SCALE: f32 = std::f32::consts::FRAC_1_SQRT_2;
+/// `SUBSCRIPT_SHIFT` / `SUPSCRIPT_SHIFT` (t1fonts.h).
+const SUBSCRIPT_SHIFT: f32 = 0.4;
+const SUPSCRIPT_SHIFT: f32 = 0.6;
+/// `ENLARGE_SCALE` = sqrt(sqrt(2)) (t1fonts.h): factor for `\+` / `\-`.
+const ENLARGE_SCALE: f32 = 1.189_207_1;
 
 /// A run of text sharing one style.
 #[derive(Debug, Clone)]
@@ -29,131 +30,275 @@ pub struct StyledRun {
     pub baseline: f32,
     /// Optional per-run color override (color index).
     pub color: Option<i32>,
+    pub underline: bool,
+    pub overline: bool,
 }
 
-/// Parse Grace markup into styled runs, starting from a base font.
-pub fn parse(input: &str, base_font: i32) -> Vec<StyledRun> {
-    let mut runs: Vec<StyledRun> = Vec::new();
+/// One parsed item: a styled text run or a pen-motion control.
+#[derive(Debug, Clone)]
+enum Item {
+    Run(StyledRun),
+    /// One-shot horizontal pen shift, in em units of the base size (`\h{}`).
+    HShift(f32),
+    /// Remember the current pen x as mark `n` (`\m{n}`).
+    SetMark(i32),
+    /// Return the pen to mark `n` (`\M{n}`).
+    GotoMark(i32),
+    /// Line break (`\n`): pen returns to the line start, baseline drops 1 em.
+    Newline,
+}
+
+/// Parse Grace markup into items, starting from a base font *slot*; the
+/// produced runs carry resolved *face* indices via `map`.
+fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
+    let mut items: Vec<Item> = Vec::new();
     let mut font = base_font;
     let mut scale = 1.0f32;
+    // Current vertical shift and the "baseline" that \v{} / \N return to
+    // (WriteString's `vshift` and `baseline`, in base-em units).
+    let mut vshift = 0.0f32;
     let mut baseline = 0.0f32;
     let mut color: Option<i32> = None;
+    let mut upperset = false;
+    let mut underline = false;
+    let mut overline = false;
     let mut buf = String::new();
 
-    // Flush the current buffer into a run with the current style.
     macro_rules! flush {
-        () => {
+        ($font:expr, $scale:expr, $vshift:expr) => {
             if !buf.is_empty() {
-                runs.push(StyledRun {
+                items.push(Item::Run(StyledRun {
                     text: std::mem::take(&mut buf),
-                    font,
-                    scale,
-                    baseline,
+                    font: resolve_face($font, map),
+                    scale: $scale,
+                    baseline: $vshift,
                     color,
-                });
+                    underline,
+                    overline,
+                }));
             }
         };
     }
+    macro_rules! flushcur {
+        () => {
+            flush!(font, scale, vshift)
+        };
+    }
+
+    // Push a possibly upper-half character, translating Symbol-font input
+    // through the Adobe Symbol encoding.
+    let push_char = |buf: &mut String, font: i32, upperset: bool, c: char| {
+        let code = if upperset && (c as u32) < 0x80 {
+            c as u32 + 0x80
+        } else {
+            c as u32
+        };
+        buf.push(crate::font::map_font_char(resolve_face(font, map), code));
+    };
 
     let mut chars = input.chars().peekable();
     while let Some(c) = chars.next() {
         if c != '\\' {
-            buf.push(c);
+            push_char(&mut buf, font, upperset, c);
             continue;
         }
-        // Escape sequence.
         let Some(&next) = chars.peek() else { break };
         match next {
             '\\' => {
-                buf.push('\\');
+                push_char(&mut buf, font, upperset, '\\');
                 chars.next();
             }
             // Font selection by single digit: \0..\9
             '0'..='9' => {
-                flush!();
+                flushcur!();
                 font = next.to_digit(10).unwrap() as i32;
                 chars.next();
             }
-            // Parameterized escapes \f{..}, \R{..}, etc.
-            'f' | 'R' | 'Z' | 'z' => {
+            // Escapes taking a {...} argument.
+            'f' | 'R' | 'z' | 'Z' | 'v' | 'V' | 'h' | 'm' | 'M' | '#' | 'r' | 'l' | 't' | 'T' => {
                 let kind = next;
                 chars.next();
+                let mut arg = String::new();
+                let mut had_braces = false;
                 if chars.peek() == Some(&'{') {
+                    had_braces = true;
                     chars.next();
-                    let mut arg = String::new();
                     for ac in chars.by_ref() {
                         if ac == '}' {
                             break;
                         }
                         arg.push(ac);
                     }
-                    match kind {
-                        'f' => {
-                            flush!();
-                            font = parse_font_arg(&arg, base_font);
+                }
+                let a = arg.trim();
+                match kind {
+                    'f' => {
+                        flushcur!();
+                        font = if a.is_empty() {
+                            base_font
+                        } else {
+                            parse_font_arg(a, base_font)
+                        };
+                    }
+                    'R' => {
+                        flushcur!();
+                        color = a.parse::<i32>().ok();
+                    }
+                    // \z{x} multiplies the size; \z{} resets it (t1fonts.cpp).
+                    'z' => {
+                        flushcur!();
+                        if a.is_empty() {
+                            scale = 1.0;
+                        } else if let Ok(v) = a.parse::<f32>() {
+                            scale *= v;
                         }
-                        'R' => {
-                            flush!();
-                            color = arg.trim().parse::<i32>().ok();
+                    }
+                    // \Z{x} sets the absolute size factor.
+                    'Z' => {
+                        flushcur!();
+                        if let Ok(v) = a.parse::<f32>() {
+                            scale = v;
                         }
-                        'z' => {
-                            flush!();
-                            if let Ok(v) = arg.trim().parse::<f32>() {
-                                scale = v;
-                            }
+                    }
+                    // \v{x}: shift up by x of the current size; \v{} returns
+                    // to the baseline. \V also moves the baseline itself.
+                    'v' => {
+                        flushcur!();
+                        if a.is_empty() {
+                            vshift = baseline;
+                        } else if let Ok(v) = a.parse::<f32>() {
+                            vshift += scale * v;
                         }
-                        _ => {}
+                    }
+                    'V' => {
+                        flushcur!();
+                        if a.is_empty() {
+                            baseline = 0.0;
+                        } else if let Ok(v) = a.parse::<f32>() {
+                            baseline += scale * v;
+                        }
+                        vshift = baseline;
+                    }
+                    'h' => {
+                        flushcur!();
+                        if let Ok(v) = a.parse::<f32>() {
+                            items.push(Item::HShift(scale * v));
+                        }
+                    }
+                    'm' => {
+                        flushcur!();
+                        if let Ok(n) = a.parse::<i32>() {
+                            items.push(Item::SetMark(n));
+                        }
+                    }
+                    'M' => {
+                        flushcur!();
+                        if let Ok(n) = a.parse::<i32>() {
+                            items.push(Item::GotoMark(n));
+                            vshift = baseline;
+                        }
+                    }
+                    // \#{ab12} inserts raw Latin-1 bytes by hex code.
+                    '#' => {
+                        let bytes: Vec<u32> = a
+                            .as_bytes()
+                            .chunks(2)
+                            .filter(|ch| ch.len() == 2)
+                            .filter_map(|ch| {
+                                u32::from_str_radix(std::str::from_utf8(ch).ok()?, 16).ok()
+                            })
+                            .collect();
+                        for b in bytes {
+                            buf.push(crate::font::map_font_char(resolve_face(font, map), b));
+                        }
+                    }
+                    // Transform escapes (\r rotate, \l slant, \t, \T) are not
+                    // supported; their argument is consumed and ignored.
+                    _ => {
+                        let _ = had_braces;
                     }
                 }
             }
             'x' => {
-                flush!();
+                flushcur!();
                 font = 12; // Symbol font
                 chars.next();
             }
+            // Subscript: shift down 0.4 of the *current* size, then shrink
+            // (both cumulative, per WriteString).
             's' => {
-                flush!();
-                scale = SSCRIPT_SCALE;
-                baseline = -SSCRIPT_SHIFT;
+                flushcur!();
+                vshift -= scale * SUBSCRIPT_SHIFT;
+                scale *= SSCRIPT_SCALE;
                 chars.next();
             }
             'S' => {
-                flush!();
-                scale = SSCRIPT_SCALE;
-                baseline = SSCRIPT_SHIFT;
+                flushcur!();
+                vshift += scale * SUPSCRIPT_SHIFT;
+                scale *= SSCRIPT_SCALE;
                 chars.next();
             }
+            // Return to normal size on the current baseline.
             'N' => {
-                flush!();
+                flushcur!();
                 scale = 1.0;
-                baseline = 0.0;
+                vshift = baseline;
                 chars.next();
             }
             '+' => {
-                flush!();
-                scale *= ENLARGE;
+                flushcur!();
+                scale *= ENLARGE_SCALE;
                 chars.next();
             }
             '-' => {
-                flush!();
-                scale /= ENLARGE;
+                flushcur!();
+                scale /= ENLARGE_SCALE;
                 chars.next();
             }
-            // Line break: Grace `\n` drops the baseline by exactly one em and
-            // returns the pen to the start x (t1fonts.cpp, case 'n':
-            // `baseline -= 1.0`, goto MARK_CR). Encoded as a literal newline
-            // in the run text and handled in `layout`.
+            // Upper-half charset on/off (\c .. \C).
+            'c' => {
+                flushcur!();
+                upperset = true;
+                chars.next();
+            }
+            'C' => {
+                flushcur!();
+                upperset = false;
+                chars.next();
+            }
+            'u' => {
+                flushcur!();
+                underline = true;
+                chars.next();
+            }
+            'U' => {
+                flushcur!();
+                underline = false;
+                chars.next();
+            }
+            'o' => {
+                flushcur!();
+                overline = true;
+                chars.next();
+            }
+            'O' => {
+                flushcur!();
+                overline = false;
+                chars.next();
+            }
+            // Line break: baseline drops exactly one em, pen returns to the
+            // line start (t1fonts.cpp case 'n': baseline -= 1.0, MARK_CR).
             'n' => {
-                buf.push('\n');
+                flushcur!();
+                baseline -= 1.0;
+                vshift = baseline;
+                items.push(Item::Newline);
                 chars.next();
             }
-            // Reset to defaults.
+            // \B: revert to the base font only (font/charset, not size).
             'B' => {
-                flush!();
+                flushcur!();
                 font = base_font;
-                scale = 1.0;
-                baseline = 0.0;
-                color = None;
                 chars.next();
             }
             // Unknown single-char escape: drop the marker char.
@@ -162,8 +307,29 @@ pub fn parse(input: &str, base_font: i32) -> Vec<StyledRun> {
             }
         }
     }
-    flush!();
-    runs
+    flush!(font, scale, vshift);
+    items
+}
+
+/// Parse Grace markup into styled runs (motion controls dropped) — kept for
+/// callers that only need the styling, e.g. tests.
+pub fn parse(input: &str, base_font: i32, map: &FontMap) -> Vec<StyledRun> {
+    parse_items(input, base_font, map)
+        .into_iter()
+        .filter_map(|i| match i {
+            Item::Run(r) => Some(r),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Resolve a font slot to an embedded face through the project map.
+fn resolve_face(slot: i32, map: &FontMap) -> i32 {
+    if (0..map.len() as i32).contains(&slot) {
+        map[slot as usize]
+    } else {
+        slot
+    }
 }
 
 fn parse_font_arg(arg: &str, base_font: i32) -> i32 {
@@ -193,50 +359,99 @@ pub struct LaidGlyph {
     pub color: Option<i32>,
 }
 
+/// An under/overline rule in em units: from `x0` to `x1` at height `y`,
+/// `thickness` thick.
+pub struct Rule {
+    pub x0: f32,
+    pub x1: f32,
+    pub y: f32,
+    pub thickness: f32,
+    pub color: Option<i32>,
+}
+
 /// Result of laying out a marked-up string: positioned glyphs plus total width.
 pub struct Layout {
     pub glyphs: Vec<LaidGlyph>,
-    /// Total advance width in em units of the base size.
+    /// Underline/overline rules.
+    pub rules: Vec<Rule>,
+    /// Total advance width in em units of the base size (widest line).
     pub width: f32,
 }
 
 /// Lay out a marked-up string into positioned glyphs (em units, base size 1).
-pub fn layout(fonts: &FontSet, input: &str, base_font: i32) -> Layout {
-    let runs = parse(input, base_font);
+pub fn layout(fonts: &FontSet, input: &str, base_font: i32, map: &FontMap) -> Layout {
+    let items = parse_items(input, base_font, map);
     let mut glyphs = Vec::new();
+    let mut rules: Vec<Rule> = Vec::new();
     let mut pen = 0.0f32;
     let mut width = 0.0f32;
-    // Extra baseline drop accumulated by `\n` breaks (one em per line).
-    let mut line = 0.0f32;
-    for run in &runs {
-        for ch in run.text.chars() {
-            if ch == '\n' {
+    let mut marks: std::collections::HashMap<i32, f32> = std::collections::HashMap::new();
+    for item in &items {
+        match item {
+            Item::HShift(dx) => pen += dx,
+            Item::SetMark(n) => {
+                marks.insert(*n, pen);
+            }
+            Item::GotoMark(n) => {
+                if let Some(&x) = marks.get(n) {
+                    pen = x;
+                }
+            }
+            Item::Newline => {
                 width = width.max(pen);
                 pen = 0.0;
-                line -= 1.0;
-                continue;
             }
-            let g = fonts.outline_char(run.font, ch);
-            glyphs.push(LaidGlyph {
-                font: run.font,
-                x: pen,
-                y: run.baseline + line,
-                scale: run.scale,
-                ch,
-                color: run.color,
-            });
-            pen += g.advance * run.scale;
+            Item::Run(run) => {
+                let start = pen;
+                for ch in run.text.chars() {
+                    let g = fonts.outline_char(run.font, ch);
+                    glyphs.push(LaidGlyph {
+                        font: run.font,
+                        x: pen,
+                        y: run.baseline,
+                        scale: run.scale,
+                        ch,
+                        color: run.color,
+                    });
+                    pen += g.advance * run.scale;
+                }
+                if (run.underline || run.overline) && pen > start {
+                    // Rule geometry from the font's metrics, scaled with the
+                    // run (Grace's t1lib draws these from the same metrics).
+                    let (upos, uthick) = fonts.underline_metrics(run.font);
+                    if run.underline {
+                        rules.push(Rule {
+                            x0: start,
+                            x1: pen,
+                            y: run.baseline + upos * run.scale,
+                            thickness: uthick * run.scale,
+                            color: run.color,
+                        });
+                    }
+                    if run.overline {
+                        let asc = fonts.ascent(run.font);
+                        rules.push(Rule {
+                            x0: start,
+                            x1: pen,
+                            y: run.baseline + (asc + uthick) * run.scale,
+                            thickness: uthick * run.scale,
+                            color: run.color,
+                        });
+                    }
+                }
+            }
         }
     }
     Layout {
         glyphs,
+        rules,
         width: width.max(pen),
     }
 }
 
 /// Quick measurement of a marked-up string's advance width in em units.
-pub fn measure(fonts: &FontSet, input: &str, base_font: i32) -> f32 {
-    layout(fonts, input, base_font).width
+pub fn measure(fonts: &FontSet, input: &str, base_font: i32, map: &FontMap) -> f32 {
+    layout(fonts, input, base_font, map).width
 }
 
 /// Rendered ink bounding box of a marked-up string, in em units of the base
@@ -245,8 +460,8 @@ pub fn measure(fonts: &FontSet, input: &str, base_font: i32) -> f32 {
 /// so it accounts for actual glyph extents, ascenders/descenders, and the
 /// baseline shifts and scaling from sub/superscript markup. `None` if no glyph
 /// has an outline (e.g. all spaces or an empty string).
-pub fn bbox(fonts: &FontSet, input: &str, base_font: i32) -> Option<(f32, f32, f32, f32)> {
-    let layout = layout(fonts, input, base_font);
+pub fn bbox(fonts: &FontSet, input: &str, base_font: i32, map: &FontMap) -> Option<(f32, f32, f32, f32)> {
+    let layout = layout(fonts, input, base_font, map);
     let mut found = false;
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for g in &layout.glyphs {

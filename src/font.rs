@@ -58,6 +58,62 @@ impl FontSet {
     }
 }
 
+/// Embedded face index of the Symbol font.
+pub const FACE_SYMBOL: i32 = 12;
+
+/// Font slot -> embedded face mapping.
+///
+/// Grace resolves the `@`-file font ids through a mapping set when `@version`
+/// is read (pars.yacc): files older than 50001 use the ACE/gr 10-font order
+/// (`map_fonts(FONT_MAP_ACEGR)`, t1fonts.cpp) with Symbol at 8; newer files
+/// use the font database order (`fonts/FontDataBase`: italic before bold,
+/// Courier at 8..11, Symbol at 12). `@map font N to "Name"` overrides single
+/// slots.
+pub type FontMap = [i32; NUM_FONTS];
+
+/// Default map for files with `@version >= 50001` (FontDataBase order).
+pub const FONT_MAP_DEFAULT: FontMap = [0, 2, 1, 3, 4, 6, 5, 7, 8, 10, 9, 11, 12, 13];
+
+/// Map for files with `@version < 50001` (`FONT_MAP_ACEGR`): the old 10-font
+/// order, bold before italic, Symbol/Dingbats at 8/9. Slots 10..13 were
+/// undefined; they keep identity as a best effort.
+pub const FONT_MAP_ACEGR: FontMap = [0, 1, 2, 3, 4, 5, 6, 7, 12, 13, 10, 11, 12, 13];
+
+/// Resolve a PostScript font name (from `@map font`) to an embedded face.
+pub fn face_by_name(name: &str) -> Option<i32> {
+    Some(match name {
+        "Times-Roman" => 0,
+        "Times-Bold" => 1,
+        "Times-Italic" => 2,
+        "Times-BoldItalic" => 3,
+        "Helvetica" => 4,
+        "Helvetica-Bold" => 5,
+        "Helvetica-Oblique" => 6,
+        "Helvetica-BoldOblique" => 7,
+        "Courier" => 8,
+        "Courier-Bold" => 9,
+        "Courier-Oblique" => 10,
+        "Courier-BoldOblique" => 11,
+        "Symbol" => 12,
+        "ZapfDingbats" => 13,
+        _ => return None,
+    })
+}
+
+/// Map an 8-bit character code to the Unicode character a *face* renders.
+/// Text faces use Latin-1 (code = codepoint). The Symbol face goes through
+/// the Adobe Symbol encoding, so `a` is alpha, `D` Delta, 0xB4 the multiply
+/// sign — Grace addresses Symbol by 8-bit codes (`\x`, `\c`). The bundled
+/// StandardSymbolsPS cmap covers those same 8-bit codes directly, so the
+/// identity is used there; the table is kept for fonts with Unicode cmaps.
+pub fn map_font_char(face: i32, code: u32) -> char {
+    // All bundled faces, including StandardSymbolsPS (whose cmap covers the
+    // Adobe Symbol 8-bit codes natively: 20-7e, 80, a0-ef, f1-fe), accept
+    // the 8-bit code as the codepoint, i.e. Latin-1 semantics.
+    let _ = face;
+    char::from_u32(code).unwrap_or('\u{FFFD}')
+}
+
 /// A glyph outline as a tiny-skia path in em units (Y up), plus its advance.
 pub struct GlyphOutline {
     pub path: Option<tiny_skia::Path>,
@@ -141,6 +197,17 @@ impl FontSet {
     pub fn ascent(&self, slot: i32) -> f32 {
         let face = self.face(slot);
         face.ascender() as f32 / face.units_per_em() as f32
+    }
+
+    /// Underline position (negative, below baseline) and thickness in em
+    /// units, from the font's own metrics.
+    pub fn underline_metrics(&self, slot: i32) -> (f32, f32) {
+        let face = self.face(slot);
+        let upem = face.units_per_em() as f32;
+        match face.underline_metrics() {
+            Some(m) => (m.position as f32 / upem, m.thickness as f32 / upem),
+            None => (-0.1, 0.05),
+        }
     }
 
     /// Descent (negative) of a slot in em units.

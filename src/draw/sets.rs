@@ -329,6 +329,25 @@ fn draw_one_symbol(canvas: &mut Canvas, set: &Set, c: VPoint, r: f64, fill: bool
     let ls = set.symbol_linestyle;
     let oc = set.symbol_pen.color;
 
+    // SYM_CHAR: write the configured character centered on the point at the
+    // symbol size (plotone.cpp drawxysym: setcharsize(size); WriteString(vp,
+    // 0, JUST_CENTER|JUST_MIDDLE, buf)). `r` is 0.01*symsize, so recover the
+    // Grace char size.
+    if set.symbol == SymbolType::Char {
+        let s = char::from(set.symbol_char).to_string();
+        canvas.draw_text(
+            c,
+            &s,
+            r / 0.01,
+            set.symbol_char_font,
+            oc,
+            crate::render::HAlign::Center,
+            crate::render::VAlign::Middle,
+            0.0,
+        );
+        return;
+    }
+
     // Build the polygon vertices (in view units) for polygonal symbols.
     let poly: Option<Vec<VPoint>> = match set.symbol {
         SymbolType::Square => {

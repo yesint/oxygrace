@@ -343,6 +343,10 @@ pub struct Set {
     pub symbol_fill: Pen,
     pub symbol_linewidth: f64,
     pub symbol_linestyle: i32,
+    /// Character code for SYM_CHAR symbols (`symbol char`).
+    pub symbol_char: u8,
+    /// Font slot for SYM_CHAR symbols (`symbol char font`).
+    pub symbol_char_font: i32,
 
     pub line_type: LineType,
     pub line_pen: Pen,
@@ -379,6 +383,8 @@ impl Set {
             symbol_fill: pen,
             symbol_linewidth: d.linewidth,
             symbol_linestyle: d.linestyle,
+            symbol_char: 65,
+            symbol_char_font: d.font,
             line_type: LineType::Straight,
             line_pen: pen,
             linestyle: d.linestyle,
@@ -470,6 +476,9 @@ pub struct Project {
     pub defaults: Defaults,
     /// Color map overrides (`@map color`): index -> (r, g, b).
     pub color_overrides: Vec<(i32, (u8, u8, u8))>,
+    /// Font slot -> embedded face map (see [`crate::font::FontMap`]); set
+    /// from `@version` and overridden per slot by `@map font`.
+    pub font_map: crate::font::FontMap,
     pub graphs: Vec<Graph>,
     /// Annotation string objects (`@with string`).
     pub strings: Vec<StringObj>,
@@ -619,6 +628,7 @@ impl Default for Project {
             dpi: 72.0,
             defaults: Defaults::default(),
             color_overrides: Vec::new(),
+            font_map: crate::font::FONT_MAP_DEFAULT,
             graphs: Vec::new(),
             strings: Vec::new(),
             lines: Vec::new(),

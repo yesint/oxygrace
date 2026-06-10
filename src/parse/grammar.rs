@@ -106,6 +106,8 @@ pub enum SetProp {
     SymbolFillColor(i32),
     SymbolFillPattern(i32),
     SymbolLinewidth(f64),
+    SymbolChar(i32),
+    SymbolCharFont(i32),
     SymbolLinestyle(i32),
     LineType(i32),
     LineColor(i32),
@@ -247,6 +249,8 @@ pub enum Command {
     Subtitle(TextProp),
     Legend(LegendProp),
     MapColor { index: i32, rgb: (u8, u8, u8) },
+    /// `@map font N to \"Name\", \"Fallback\"`.
+    MapFont { slot: usize, name: String },
     /// A recognized-but-ignored or unrecognized command.
     Unknown,
 }
@@ -547,6 +551,8 @@ peg::parser! {
             / kw("color") __ n:iflex() { SetProp::SymbolColor(n) }
             / kw("fill") __ kw("color") __ n:iflex() { SetProp::SymbolFillColor(n) }
             / kw("fill") __ kw("pattern") __ n:iflex() { SetProp::SymbolFillPattern(n) }
+            / kw("char") __ kw("font") __ n:iflex() { SetProp::SymbolCharFont(n) }
+            / kw("char") __ n:iflex() { SetProp::SymbolChar(n) }
             / kw("linewidth") __ n:num() { SetProp::SymbolLinewidth(n) }
             / kw("linestyle") __ n:iflex() { SetProp::SymbolLinestyle(n) }
             / n:iflex() { SetProp::Symbol(n) }
@@ -619,6 +625,9 @@ peg::parser! {
         rule map_color() -> Command
             = kw("map") __ kw("color") __ idx:int() __ kw("to") __ "(" _ r:iflex() comma() g:iflex() comma() b:iflex() _ ")" rest:[_]* {
                 Command::MapColor { index: idx, rgb: (clamp_u8(r), clamp_u8(g), clamp_u8(b)) }
+            }
+            / kw("map") __ kw("font") __ slot:uint() __ kw("to") _ s:qstring() rest:[_]* {
+                Command::MapFont { slot, name: s }
             }
     }
 }
