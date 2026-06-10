@@ -124,6 +124,8 @@ pub struct Axis {
     pub tick_round: bool,
     /// Ticks point inward (`true`) or outward.
     pub ticks_in: bool,
+    /// Bar/tick placement (`tick op`): 0 normal edge, 1 opposite, 2 both.
+    pub op: i32,
     pub major_props: TickProps,
     pub minor_props: TickProps,
     /// Whether numeric tick labels are drawn.
@@ -173,6 +175,7 @@ impl Default for Axis {
             autonum: 6,
             tick_round: true,
             ticks_in: true,
+            op: 2,
             major_props: TickProps::default(),
             minor_props: TickProps {
                 size: 0.5,

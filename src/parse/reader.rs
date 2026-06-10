@@ -463,6 +463,7 @@ fn apply_axis(axis: &mut crate::model::Axis, prop: AxisProp) {
         AxisProp::MinorTicks(n) => axis.minor_ticks = n,
         AxisProp::AutoNum(n) => axis.autonum = n,
         AxisProp::TickRound(b) => axis.tick_round = b,
+        AxisProp::TickOp(n) => axis.op = n,
         AxisProp::Major(p) => apply_tick_level(&mut axis.major_props, &mut axis.major, p),
         AxisProp::Minor(p) => apply_tick_level(&mut axis.minor_props, &mut axis.major, p),
         AxisProp::TlActive(b) => axis.ticklabels = b,

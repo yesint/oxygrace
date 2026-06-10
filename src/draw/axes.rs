@@ -87,14 +87,25 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
         }
     }
 
-    // Axis bar along the frame edge.
+    // Axis bar along the frame edge(s): at the normal edge, the opposite
+    // edge, or both, per `tick op` (drawticks.cpp t_drawbar / t_op).
     if axis.draw_bar {
-        let (a, b) = if is_x {
-            (VPoint { x: v.xmin, y: v.ymin }, VPoint { x: v.xmax, y: v.ymin })
-        } else {
-            (VPoint { x: v.xmin, y: v.ymin }, VPoint { x: v.xmin, y: v.ymax })
-        };
-        canvas.draw_polyline(&[a, b], axis.bar_color, axis.bar_linewidth, axis.bar_linestyle);
+        if axis.op == 0 || axis.op == 2 {
+            let (a, b) = if is_x {
+                (VPoint { x: v.xmin, y: v.ymin }, VPoint { x: v.xmax, y: v.ymin })
+            } else {
+                (VPoint { x: v.xmin, y: v.ymin }, VPoint { x: v.xmin, y: v.ymax })
+            };
+            canvas.draw_polyline(&[a, b], axis.bar_color, axis.bar_linewidth, axis.bar_linestyle);
+        }
+        if axis.op == 1 || axis.op == 2 {
+            let (a, b) = if is_x {
+                (VPoint { x: v.xmin, y: v.ymax }, VPoint { x: v.xmax, y: v.ymax })
+            } else {
+                (VPoint { x: v.xmax, y: v.ymin }, VPoint { x: v.xmax, y: v.ymax })
+            };
+            canvas.draw_polyline(&[a, b], axis.bar_color, axis.bar_linewidth, axis.bar_linestyle);
+        }
     }
 
     if axis.ticks {
@@ -142,12 +153,17 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
         // the y label is MIDDLE-justified (centered on the anchor) — see
         // tlabel1_just. The visible gap then comes from that centering plus the
         // glyph side bearings.
-        let tl_extent = if axis.ticklabels {
-            tick_label_extent(canvas, is_x, &labeled, axis)
+        // Grace's bb (BBOX_TYPE_TEMP) covers both the tick-mark lines and
+        // the drawn tick labels; the label sits tl_offset beyond whichever
+        // extends further. Without tick labels this reduces to the outward
+        // tick length (or zero for inward ticks) plus the gap.
+        let ticks_extent = if axis.ticks && !axis.ticks_in { tsize } else { 0.0 };
+        let labels_extent = if axis.ticklabels && !labeled.is_empty() {
+            tl_base + tick_label_extent(canvas, is_x, &labeled, axis)
         } else {
             0.0
         };
-        let offset = tl_base + tl_extent + TL_OFFSET;
+        let offset = ticks_extent.max(labels_extent) + TL_OFFSET;
         draw_axis_label(canvas, &v, is_x, axis, offset);
     }
 }

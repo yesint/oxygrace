@@ -76,6 +76,7 @@ pub enum AxisProp {
     MinorTicks(i32),
     AutoNum(i32),
     TickRound(bool),
+    TickOp(i32),
     Major(TickLevelProp),
     Minor(TickLevelProp),
     TlActive(bool),
@@ -536,6 +537,11 @@ peg::parser! {
             / kw("minor") __ p:tick_level(false) { AxisProp::Minor(p) }
             / kw("default") __ n:iflex() { AxisProp::AutoNum(n) }
             / kw("place") __ kw("rounded") __ b:onoff() { AxisProp::TickRound(b) }
+            / kw("op") __ v:(
+                  kw("both") { 2 }
+                  / kw("bottom") { 0 } / kw("left") { 0 } / kw("normal") { 0 }
+                  / kw("top") { 1 } / kw("right") { 1 } / kw("opposite") { 1 }
+              ) { AxisProp::TickOp(v) }
             / [_]* { AxisProp::Ignored }
 
         /// Major (`spacing` allowed) / minor tick level properties.

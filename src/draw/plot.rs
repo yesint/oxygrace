@@ -54,6 +54,11 @@ fn fill_frame(canvas: &mut Canvas, graph: &Graph) {
 /// Draw the frame box around the plotting area (type 0 = closed rectangle).
 fn draw_frame_border(canvas: &mut Canvas, graph: &Graph) {
     let f = &graph.frame;
+    // A zero pen pattern makes the border invisible (Grace strokes the frame
+    // with its Pen; pattern 0 = none) — xyz.agr hides its frame this way.
+    if f.pen.pattern == 0 {
+        return;
+    }
     let v = graph.view;
     let rect = [
         VPoint { x: v.xmin, y: v.ymin },
