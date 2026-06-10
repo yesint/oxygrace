@@ -295,7 +295,9 @@ fn draw_set_symbols(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set
             continue;
         }
         let fill_color = match zcolor {
-            Some(z) => z.get(i).copied().unwrap_or(0.0) as i32,
+            // Grace rounds the per-point color index (drawsetsyms:
+            // `(int) rint(c[i])`), it does not truncate.
+            Some(z) => z.get(i).copied().unwrap_or(0.0).round() as i32,
             None => set.symbol_fill.color,
         };
         let c = VPoint { x: vx, y: vy };

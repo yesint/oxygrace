@@ -279,10 +279,17 @@ peg::parser! {
             / kw("true") { true }
             / kw("off") { false }
             / kw("false") { false }
-            / "1" { true }
-            / "0" { false }
+            // Bare 0/1 must not swallow the start of a number ("legend 0.48,
+            // 0.80"): PEG choice commits, so a prefix match here would make
+            // the whole line unparsable.
+            / "1" !['0'..='9' | '.'] { true }
+            / "0" !['0'..='9' | '.'] { false }
 
-        rule qstring() -> String = "\"" s:$([^ '"']*) "\"" { s.to_string() }
+        /// Double-quoted string. `\"` is an escaped quote (Grace's writer
+        /// emits it); all other backslash sequences (text markup like `\n`,
+        /// `\s`) are kept verbatim for the markup parser.
+        rule qstring() -> String
+            = "\"" s:$(("\\\"" / [^ '"'])*) "\"" { s.replace("\\\"", "\"") }
         rule word() -> &'input str = $(['a'..='z' | 'A'..='Z']+)
 
         /// `g0` / `G3` graph selector -> index.
