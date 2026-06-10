@@ -75,6 +75,7 @@ pub enum AxisProp {
     TicksDir(bool), // true = in
     MinorTicks(i32),
     AutoNum(i32),
+    TickRound(bool),
     Major(TickLevelProp),
     Minor(TickLevelProp),
     TlActive(bool),
@@ -86,6 +87,7 @@ pub enum AxisProp {
     TlAngle(i32),
     TlAppend(String),
     TlPrepend(String),
+    TlSkip(i32),
     TlStartSpec(bool),
     TlStart(f64),
     TlStopSpec(bool),
@@ -490,6 +492,7 @@ peg::parser! {
             / kw("minor") __ kw("ticks") __ n:iflex() { AxisProp::MinorTicks(n) }
             / kw("minor") __ p:tick_level(false) { AxisProp::Minor(p) }
             / kw("default") __ n:iflex() { AxisProp::AutoNum(n) }
+            / kw("place") __ kw("rounded") __ b:onoff() { AxisProp::TickRound(b) }
             / [_]* { AxisProp::Ignored }
 
         /// Major (`spacing` allowed) / minor tick level properties.
@@ -504,6 +507,7 @@ peg::parser! {
         rule axis_ticklabel() -> AxisProp
             = b:onoff() { AxisProp::TlActive(b) }
             / kw("prec") __ n:iflex() { AxisProp::TlPrec(n) }
+            / kw("skip") __ n:iflex() { AxisProp::TlSkip(n) }
             / kw("format") __ w:word() {
                 AxisProp::TlFormat(TickFormat::parse(w).unwrap_or(TickFormat::Decimal))
             }

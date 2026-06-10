@@ -13,8 +13,9 @@ const TICK_UNIT: f64 = 0.02;
 /// Perpendicular gap (view units) between a tick and its label, and between
 /// the tick labels and the axis label (Grace's auto `tl_offset`).
 const TL_OFFSET: f64 = 0.01;
-/// Maximum number of ticks generated for one axis (runaway guard).
-const MAX_TICKS: usize = 1000;
+/// Maximum number of ticks per axis before re-autoticking (Grace `MAX_TICKS`,
+/// defines.h).
+const MAX_TICKS: usize = 256;
 
 /// Draw all active axes of a graph.
 pub fn draw_axes(canvas: &mut Canvas, graph: &Graph) {
@@ -38,8 +39,17 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
         (graph.world.ymin, graph.world.ymax)
     };
 
-    let majors = major_ticks(wmin, wmax, axis.major);
-    let minors = minor_ticks(&majors, axis.minor_ticks, wmin, wmax);
+    let scale = if is_x { graph.xscale } else { graph.yscale };
+    let grid = tick_grid(
+        wmin,
+        wmax,
+        scale,
+        axis.major,
+        axis.minor_ticks,
+        axis.autonum,
+        axis.tick_round,
+    );
+    let (majors, minors) = (grid.majors, grid.minors);
 
     // Grid lines first so ticks/data sit on top.
     if axis.major_props.grid {
@@ -83,11 +93,21 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
     let tsize = TICK_UNIT * axis.major_props.size;
     let tl_base = if axis.ticks_in { 0.0 } else { tsize } + TL_OFFSET;
 
+    // Majors that get a label: in the spec start/stop range, then every
+    // (tl_skip+1)-th of those (drawticks.cpp: `itcur % (tl_skip + 1) == 0`,
+    // where itcur runs over the in-range majors only).
+    let labeled: Vec<f64> = majors
+        .iter()
+        .copied()
+        .filter(|&t| tick_label_visible(axis, t))
+        .enumerate()
+        .filter(|(i, _)| *i as i32 % (axis.tl_skip + 1) == 0)
+        .map(|(_, t)| t)
+        .collect();
+
     if axis.ticklabels {
-        for &t in &majors {
-            if tick_label_visible(axis, t) {
-                draw_tick_label(canvas, wt, &v, is_x, t, tl_base, axis);
-            }
+        for &t in &labeled {
+            draw_tick_label(canvas, wt, &v, is_x, t, tl_base, axis);
         }
     }
 
@@ -98,11 +118,6 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
         // the y label is MIDDLE-justified (centered on the anchor) — see
         // tlabel1_just. The visible gap then comes from that centering plus the
         // glyph side bearings.
-        let labeled: Vec<f64> = majors
-            .iter()
-            .copied()
-            .filter(|&t| tick_label_visible(axis, t))
-            .collect();
         let tl_extent = if axis.ticklabels {
             tick_label_extent(canvas, is_x, &labeled, axis)
         } else {
@@ -249,74 +264,271 @@ fn draw_axis_label(canvas: &mut Canvas, v: &crate::model::View, is_x: bool, axis
 
 /// Generate major tick world positions at multiples of `step`.
 pub fn major_ticks(wmin: f64, wmax: f64, step: f64) -> Vec<f64> {
-    let mut out = Vec::new();
-    if !step.is_finite() || step <= 0.0 {
-        return out;
-    }
-    let (lo, hi) = (wmin.min(wmax), wmin.max(wmax));
-    let first = (lo / step).ceil() as i64;
-    let last = (hi / step).floor() as i64;
-    if last < first || (last - first) as usize > MAX_TICKS {
-        return out;
-    }
-    for n in first..=last {
-        let pos = n as f64 * step;
-        // Guard against floating point landing just outside the window.
-        if pos >= lo - step * 1e-9 && pos <= hi + step * 1e-9 {
-            out.push(pos);
-        }
-    }
-    out
+    let g = tick_grid(wmin, wmax, ScaleType::Normal, step, 0, 6, true);
+    g.majors
 }
 
-/// Generate minor tick positions between majors (excluding major positions).
-fn minor_ticks(majors: &[f64], nminor: i32, wmin: f64, wmax: f64) -> Vec<f64> {
-    let mut out = Vec::new();
-    if nminor <= 0 || majors.is_empty() {
-        return out;
+/// Generated tick positions for one axis.
+pub struct TickGrid {
+    pub majors: Vec<f64>,
+    pub minors: Vec<f64>,
+}
+
+/// `nicenum` (graphutils.cpp): a "nice" number approximately equal to `x`.
+/// `round`: 0 = floor, 1 = ceil, 2 = round to 1/2/5/10.
+fn nicenum(x: f64, nrange: i32, round: i32) -> f64 {
+    if x == 0.0 {
+        return 0.0;
     }
-    // Spacing inferred from consecutive majors; fall back to none if unknown.
-    let step = if majors.len() >= 2 {
-        majors[1] - majors[0]
-    } else {
-        return out;
+    let xsign = x.signum();
+    let x = x.abs();
+    let fexp = x.log10().floor() - nrange as f64;
+    let sx = x / 10f64.powf(fexp) / 10.0;
+    let rx = sx.floor();
+    let f = 10.0 * (sx - rx);
+    let pos = xsign > 0.0;
+    let y = match round {
+        0 if pos => f.floor(),  // NICE_FLOOR, x > 0
+        0 => f.ceil(),          // NICE_FLOOR, x < 0
+        1 if pos => f.ceil(),   // NICE_CEIL, x > 0
+        1 => f.floor(),         // NICE_CEIL, x < 0
+        _ => {
+            if f < 1.5 {
+                1.0
+            } else if f < 3.0 {
+                2.0
+            } else if f < 7.0 {
+                5.0
+            } else {
+                10.0
+            }
+        }
     };
-    let minor_step = step / (nminor as f64 + 1.0);
-    let (lo, hi) = (wmin.min(wmax), wmin.max(wmax));
-    // Extend one major step below the first major to cover the leading edge.
-    let start = majors[0] - step;
-    let mut x = start;
-    let mut guard = 0usize;
-    while x <= hi + step && guard < MAX_TICKS {
-        guard += 1;
-        x += minor_step;
-        if x < lo || x > hi {
-            continue;
-        }
-        // Skip positions that coincide with a major tick.
-        if majors.iter().any(|&m| (m - x).abs() < minor_step * 1e-6) {
-            continue;
-        }
-        out.push(x);
-    }
-    out
+    xsign * (rx + y / 10.0) * 10.0 * 10f64.powf(fexp)
 }
 
-/// Format a tick value according to its format and precision.
+/// Generate major + minor tick positions, mirroring Grace's
+/// `calculate_tickgrid` (drawticks.cpp, `TICKS_SPEC_NONE` branch).
+///
+/// On log axes both the world window and the major spacing live in log10
+/// space: `tick major 10` means one major per decade, `tick major 2` one per
+/// octave; the minor ticks are the `2..=nminor+1` multiples of each major.
+/// On all other scales spacing is arithmetic. If the spacing is invalid or
+/// would produce more than `MAX_TICKS` ticks, the spacing is recomputed like
+/// Grace's `auto_ticks` (graphutils.cpp) from the axis' `autonum`.
+pub fn tick_grid(
+    wmin: f64,
+    wmax: f64,
+    scale: ScaleType,
+    tmajor: f64,
+    nminor: i32,
+    autonum: i32,
+    t_round: bool,
+) -> TickGrid {
+    let log = scale == ScaleType::Logarithmic;
+    let (lo, hi) = (wmin.min(wmax), wmin.max(wmax));
+    let (swc_lo, swc_hi) = if log {
+        if hi <= 0.0 {
+            return TickGrid { majors: vec![], minors: vec![] };
+        }
+        (lo.max(hi * 1e-30).log10(), hi.log10())
+    } else {
+        (lo, hi)
+    };
+
+    let mut tmajor = tmajor;
+    let mut nminor = nminor;
+
+    // auto_ticks (graphutils.cpp): pick a spacing giving about `autonum`
+    // major ticks, and a sane minor count.
+    let autotick = |tmajor: &mut f64, nminor: &mut i32| {
+        let autonum = autonum.max(2) as f64;
+        if log {
+            if *tmajor <= 1.0 {
+                *tmajor = 10.0;
+            }
+            let range = (swc_hi - swc_lo) / tmajor.log10();
+            let d = (range / (autonum - 1.0)).ceil().max(1.0);
+            *tmajor = tmajor.powf(d);
+            if *nminor < 0 || *nminor > 10 {
+                *nminor = 8;
+            }
+        } else {
+            if *tmajor <= 0.0 {
+                *tmajor = 1.0;
+            }
+            *tmajor = nicenum((swc_hi - swc_lo) / (autonum - 1.0), 0, 2);
+            if *nminor < 0 || *nminor > 10 {
+                *nminor = 1;
+            }
+        }
+    };
+
+    // Scaled spacing; invalid values trigger autoticking, as does an
+    // excessive tick count (calculate_tickgrid's MAX_TICKS reenter loop).
+    for attempt in 0..2 {
+        let stmajor = if log { tmajor.log10() } else { tmajor };
+        if stmajor <= 0.0 || !stmajor.is_finite() {
+            autotick(&mut tmajor, &mut nminor);
+            continue;
+        }
+        let mut swc_start = swc_lo;
+        if t_round {
+            swc_start = (swc_start / stmajor).floor() * stmajor;
+        }
+        let nmajor = ((swc_hi - swc_start) / stmajor + 1.0).ceil();
+        let nticks = (nmajor - 1.0) * (nminor.max(0) as f64 + 1.0) + 1.0;
+        if nmajor.is_nan() || nmajor < 1.0 || nticks > MAX_TICKS as f64 {
+            if attempt == 0 {
+                autotick(&mut tmajor, &mut nminor);
+                continue;
+            }
+            return TickGrid { majors: vec![], minors: vec![] };
+        }
+
+        let mut majors = Vec::new();
+        let mut minors = Vec::new();
+        // Positions are generated over the rounded-down range and then
+        // filtered to the world window, like Grace generates the full grid
+        // and skips out-of-range ticks at draw time.
+        let inside = |w: f64| {
+            let tol = 1e-9 * (hi - lo).abs();
+            w >= lo - tol && w <= hi + tol
+        };
+        for itmaj in 0..(nmajor as i64) {
+            let s = swc_start + itmaj as f64 * stmajor;
+            let wtmaj = if log {
+                10f64.powf(s)
+            } else if t_round && s.abs() < 1.0e-6 * stmajor {
+                0.0
+            } else {
+                s
+            };
+            if inside(wtmaj) {
+                majors.push(wtmaj);
+            }
+            for imtick in 0..nminor.max(0) {
+                let w = if log {
+                    // Minors at 2x, 3x … of the decade's major.
+                    wtmaj * (imtick + 2) as f64
+                } else {
+                    wtmaj + (imtick + 1) as f64 * stmajor / (nminor as f64 + 1.0)
+                };
+                if inside(w) {
+                    minors.push(w);
+                }
+            }
+        }
+        return TickGrid { majors, minors };
+    }
+    TickGrid { majors: vec![], minors: vec![] }
+}
+
+/// Format a tick value according to its format and precision, following
+/// Grace's `create_fstring` (utils.cpp, `LFORMAT_TYPE_EXTENDED`): power and
+/// scientific labels use text-markup superscripts, engineering uses SI
+/// prefixes on multiples of 10³, computing uses K/M/G… on powers of 1024.
 pub fn format_value(value: f64, format: TickFormat, prec: i32) -> String {
     let prec = prec.max(0) as usize;
     // Normalize negative zero so "-0.0" never appears.
     let v = if value == 0.0 { 0.0 } else { value };
     match format {
         TickFormat::Decimal => format!("{:.*}", prec, v),
-        TickFormat::Exponential | TickFormat::Scientific => format!("{:.*e}", prec, v),
+        TickFormat::Exponential => format!("{:.*e}", prec, v),
+        TickFormat::Scientific => {
+            // "%.*fx10^%d" with the mantissa in [1, 10).
+            if v == 0.0 {
+                return format!("{:.*}", prec, 0.0);
+            }
+            let exponent = v.abs().log10().floor();
+            let mantissa = v / 10f64.powf(exponent);
+            format!("{:.*}\\x\\c4\\C\\f{{}}10\\S{}\\N", prec, mantissa, exponent as i64)
+        }
         TickFormat::General => {
-            // Trim trailing zeros from a decimal representation.
+            // %g semantics: shortest of fixed/scientific with `prec`
+            // significant digits, trailing zeros trimmed.
             let s = format!("{:.*}", prec.max(6), v);
             let s = s.trim_end_matches('0').trim_end_matches('.');
             if s.is_empty() { "0".to_string() } else { s.to_string() }
         }
-        TickFormat::Power | TickFormat::Engineering => format!("{:.*}", prec, v),
+        TickFormat::Power => {
+            // 10^exp as markup; negative values as -10^exp (create_fstring
+            // FORMAT_POWER). The exponent keeps `prec` decimals.
+            if v == 0.0 {
+                format!("{:.*}", prec, 0.0)
+            } else if v < 0.0 {
+                format!("-10\\S{:.*}\\N", prec, (-v).log10())
+            } else {
+                format!("10\\S{:.*}\\N", prec, v.log10())
+            }
+        }
+        TickFormat::Engineering => {
+            let exponent = if v != 0.0 {
+                (v.abs().log10().floor().clamp(-24.0, 24.0) / 3.0).floor() * 3.0
+            } else {
+                0.0
+            };
+            let prefix = match exponent as i32 {
+                -24 => "y",
+                -21 => "z",
+                -18 => "a",
+                -15 => "f",
+                -12 => "p",
+                -9 => "n",
+                // Micro is the Greek mu from the Symbol font.
+                -6 => "\\xm\\f{}",
+                -3 => "m",
+                3 => "k",
+                6 => "M",
+                9 => "G",
+                12 => "T",
+                15 => "P",
+                18 => "E",
+                21 => "Z",
+                24 => "Y",
+                _ => "",
+            };
+            format!("{:.*} {}", prec, v / 10f64.powf(exponent), prefix)
+        }
+        TickFormat::Computing => {
+            // Powers of 1024 with K/M/G… suffix (FORMAT_COMPUTING).
+            let mut exponent = if v != 0.0 {
+                let e = v.abs().log2().floor();
+                if e < 10.0 {
+                    0
+                } else {
+                    ((e / 10.0).floor() as i32 * 10).min(80)
+                }
+            } else {
+                0
+            };
+            let sig = |x: f64, p: usize| -> String {
+                // %.*g: p significant digits, trailing zeros trimmed.
+                let s = format!("{:.*e}", p.saturating_sub(1), x);
+                s.parse::<f64>().map(|f| {
+                    let fs = format!("{}", f);
+                    fs
+                }).unwrap_or(s)
+            };
+            let mut s = sig(v / 2f64.powi(exponent), prec.max(1));
+            // Roll to the next prefix for values that round to 1024.
+            if exponent < 80 && s == "1024" {
+                exponent += 10;
+                s = sig(v / 2f64.powi(exponent), prec.max(1));
+            }
+            let prefix = match exponent {
+                10 => "K",
+                20 => "M",
+                30 => "G",
+                40 => "T",
+                50 => "P",
+                60 => "E",
+                70 => "Z",
+                80 => "Y",
+                _ => "",
+            };
+            format!("{}{}", s, prefix)
+        }
     }
 }
 

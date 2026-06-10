@@ -174,9 +174,8 @@ pub enum FillType {
     Baseline,
 }
 
-/// Numeric tick-label format. Only [`TickFormat::Decimal`] and
-/// [`TickFormat::General`] are formatted in milestone 1; others fall back to a
-/// general representation.
+/// Numeric tick-label format (Grace `FORMAT_*`; the date/geographic formats
+/// are not yet supported and parse as `None` -> Decimal).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TickFormat {
     #[default]
@@ -186,6 +185,7 @@ pub enum TickFormat {
     Power,
     Scientific,
     Engineering,
+    Computing,
 }
 
 impl TickFormat {
@@ -199,6 +199,7 @@ impl TickFormat {
             "power" => Power,
             "scientific" => Scientific,
             "engineering" => Engineering,
+            "computing" => Computing,
             _ => return None,
         })
     }

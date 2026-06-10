@@ -147,6 +147,14 @@ fn postprocess_version(project: &mut Project, version: i32) {
             }
         }
     }
+    // "BBox type justification was erroneously set" (graphs.cpp
+    // postprocess_project): files written by 4.2.0..5.0.5 anchor strings at
+    // the vertical middle of their bounding box.
+    if (40200..=50005).contains(&version) {
+        for s in &mut project.strings {
+            s.just |= 12; // JUST_MIDDLE
+        }
+    }
 }
 
 /// Write the accumulated data rows into the target dataset, then clear them.
@@ -432,10 +440,12 @@ fn apply_axis(axis: &mut crate::model::Axis, prop: AxisProp) {
         AxisProp::TicksDir(inn) => axis.ticks_in = inn,
         AxisProp::MinorTicks(n) => axis.minor_ticks = n,
         AxisProp::AutoNum(n) => axis.autonum = n,
+        AxisProp::TickRound(b) => axis.tick_round = b,
         AxisProp::Major(p) => apply_tick_level(&mut axis.major_props, &mut axis.major, p),
         AxisProp::Minor(p) => apply_tick_level(&mut axis.minor_props, &mut axis.major, p),
         AxisProp::TlActive(b) => axis.ticklabels = b,
         AxisProp::TlPrec(n) => axis.tl_prec = n,
+        AxisProp::TlSkip(n) => axis.tl_skip = n.max(0),
         AxisProp::TlFormat(f) => axis.tl_format = f,
         AxisProp::TlFont(n) => axis.tl_font = n,
         AxisProp::TlColor(n) => axis.tl_color = n,

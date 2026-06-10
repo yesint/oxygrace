@@ -119,6 +119,9 @@ pub struct Axis {
     pub minor_ticks: i32,
     /// Approximate desired number of major ticks (for autotick; unused in M1).
     pub autonum: i32,
+    /// Round the first major tick down to a multiple of the spacing
+    /// (`tick place rounded`, Grace `t_round`; default true).
+    pub tick_round: bool,
     /// Ticks point inward (`true`) or outward.
     pub ticks_in: bool,
     pub major_props: TickProps,
@@ -136,6 +139,8 @@ pub struct Axis {
     /// Restrict tick labels to `tl_start..=tl_stop` when the respective type is
     /// "spec" (Grace `ticklabel start/stop type spec`); ticks themselves are
     /// still drawn at every position.
+    /// Label every (skip+1)-th major tick (`ticklabel skip`).
+    pub tl_skip: i32,
     pub tl_start_spec: bool,
     pub tl_start: f64,
     pub tl_stop_spec: bool,
@@ -158,6 +163,7 @@ impl Default for Axis {
             major: 0.5,
             minor_ticks: 1,
             autonum: 6,
+            tick_round: true,
             ticks_in: true,
             major_props: TickProps::default(),
             minor_props: TickProps {
@@ -173,6 +179,7 @@ impl Default for Axis {
             tl_angle: 0,
             tl_prepend: String::new(),
             tl_append: String::new(),
+            tl_skip: 0,
             tl_start_spec: false,
             tl_start: 0.0,
             tl_stop_spec: false,
