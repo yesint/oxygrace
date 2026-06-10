@@ -25,6 +25,8 @@ struct Cursor {
     data_type: SetType,
     /// Accumulated numeric rows for the current data block.
     rows: Vec<Vec<f64>>,
+    /// Per-row annotation strings (trailing quoted column).
+    row_strs: Vec<Option<String>>,
     /// Whether each graph's world window was set explicitly (vs. needs autoscale).
     world_set: Vec<bool>,
     /// Project file format version (`@version`), 0 if unspecified.
@@ -39,6 +41,7 @@ impl Cursor {
             auto_set: 0,
             data_type: SetType::Xy,
             rows: Vec::new(),
+            row_strs: Vec::new(),
             world_set: Vec::new(),
             version: 0,
         }
@@ -80,8 +83,9 @@ pub fn parse_project(content: &str) -> Project {
             continue;
         }
         // Otherwise a data row.
-        if let Some(row) = data::parse_row(trimmed) {
+        if let Some((row, s)) = data::parse_row(trimmed) {
             cur.rows.push(row);
+            cur.row_strs.push(s);
         }
     }
     flush_data(&mut project, &mut cur);
@@ -163,6 +167,7 @@ fn flush_data(project: &mut Project, cur: &mut Cursor) {
         return;
     }
     let rows = std::mem::take(&mut cur.rows);
+    let row_strs = std::mem::take(&mut cur.row_strs);
     // With an explicit `@target` use it; otherwise (old-format files) stream
     // each successive block into the next set of the current graph.
     let (g, s) = match cur.target {
@@ -184,6 +189,7 @@ fn flush_data(project: &mut Project, cur: &mut Cursor) {
     set.data.cols = (0..ncols)
         .map(|c| rows.iter().filter_map(|r| r.get(c).copied()).collect())
         .collect();
+    set.data.strs = row_strs;
 }
 
 /// Apply a parsed command to the project, updating the cursor as needed.
@@ -547,6 +553,17 @@ fn apply_set(set: &mut crate::model::Set, prop: SetProp) {
         SetProp::FillRule(n) => set.fill_rule = n,
         SetProp::BaselineType(n) => set.baseline_type = n,
         SetProp::Dropline(b) => set.dropline = b,
+        SetProp::AvOn(b) => set.avalue.active = b,
+        SetProp::AvType(n) => set.avalue.avtype = n,
+        SetProp::AvSize(v) => set.avalue.size = v,
+        SetProp::AvFont(n) => set.avalue.font = n,
+        SetProp::AvColor(n) => set.avalue.color = n,
+        SetProp::AvRot(v) => set.avalue.angle = v,
+        SetProp::AvFormat(f) => set.avalue.format = f,
+        SetProp::AvPrec(n) => set.avalue.prec = n,
+        SetProp::AvOffset(x, y) => (set.avalue.offx, set.avalue.offy) = (x, y),
+        SetProp::AvPrepend(s) => set.avalue.prepend = s,
+        SetProp::AvAppend(s) => set.avalue.append = s,
         SetProp::Legend(s) => set.legend = s,
         SetProp::Comment(s) => set.comment = s,
         SetProp::Ignored => {}

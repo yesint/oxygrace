@@ -134,6 +134,17 @@ pub enum SetProp {
     Dropline(bool),
     Legend(String),
     Comment(String),
+    AvOn(bool),
+    AvType(i32),
+    AvSize(f64),
+    AvFont(i32),
+    AvColor(i32),
+    AvRot(f64),
+    AvFormat(TickFormat),
+    AvPrec(i32),
+    AvOffset(f64, f64),
+    AvPrepend(String),
+    AvAppend(String),
     Ignored,
 }
 
@@ -560,6 +571,7 @@ peg::parser! {
             / kw("symbol") __ p:set_symbol() { p }
             / kw("line") __ p:set_line() { p }
             / kw("fill") __ p:set_fill() { p }
+            / kw("avalue") __ p:set_avalue() { p }
             / kw("baseline") __ kw("type") __ n:iflex() { SetProp::BaselineType(n) }
             / kw("dropline") __ b:onoff() { SetProp::Dropline(b) }
             / kw("legend") __ s:qstring() { SetProp::Legend(s) }
@@ -586,6 +598,22 @@ peg::parser! {
             / kw("color") __ n:iflex() { SetProp::LineColor(n) }
             / kw("linewidth") __ n:num() { SetProp::LineLinewidth(n) }
             / kw("linestyle") __ n:iflex() { SetProp::LineLinestyle(n) }
+            / [_]* { SetProp::Ignored }
+
+        rule set_avalue() -> SetProp
+            = b:onoff() { SetProp::AvOn(b) }
+            / kw("type") __ n:iflex() { SetProp::AvType(n) }
+            / kw("char") __ kw("size") __ v:num() { SetProp::AvSize(v) }
+            / kw("font") __ n:iflex() { SetProp::AvFont(n) }
+            / kw("color") __ n:iflex() { SetProp::AvColor(n) }
+            / kw("rot") __ v:num() { SetProp::AvRot(v) }
+            / kw("format") __ w:word() {
+                SetProp::AvFormat(TickFormat::parse(w).unwrap_or(TickFormat::General))
+            }
+            / kw("prec") __ n:iflex() { SetProp::AvPrec(n) }
+            / kw("offset") __ x:num() comma() y:num() { SetProp::AvOffset(x, y) }
+            / kw("prepend") __ s:qstring() { SetProp::AvPrepend(s) }
+            / kw("append") __ s:qstring() { SetProp::AvAppend(s) }
             / [_]* { SetProp::Ignored }
 
         rule set_fill() -> SetProp

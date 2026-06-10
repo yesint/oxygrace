@@ -23,6 +23,7 @@ const SQRT1_2: f64 = std::f64::consts::FRAC_1_SQRT_2;
 pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
     let wt = WorldTransform::new(graph);
     let v = graph.view;
+    let chart_layout = chart_layout_map(graph);
     canvas.set_clip_view(v.xmin, v.ymin, v.xmax, v.ymax);
     // Bars are drawn first (as a grouped pass) so lines/symbols sit on top.
     draw_bars(canvas, &wt, graph);
@@ -34,19 +35,140 @@ pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
         // Fill is drawn under the line, then symbols on top (Grace order).
         // Bar-type sets are rendered entirely by draw_bars: Grace never draws
         // a connecting line or symbols for them, even if those properties are
-        // set in the file.
-        draw_set_fill(canvas, &wt, graph, set);
+        // set in the file. Stacked charts shift every element by the running
+        // category totals (refy), exactly as plotone passes refy through.
+        let (off, refy) = chart_layout
+            .get(&(set as *const Set as usize))
+            .map(|(o, r)| (*o, r.as_deref()))
+            .unwrap_or((0.0, None));
+        draw_set_fill(canvas, &wt, graph, set, refy);
         if set.dropline {
             draw_droplines(canvas, &wt, graph, set);
         }
         if !is_bar(set.set_type) {
-            draw_set_line(canvas, &wt, set);
-            canvas.clear_clip();
-            draw_set_symbols(canvas, &wt, graph, set);
-            canvas.set_clip_view(v.xmin, v.ymin, v.xmax, v.ymax);
+            draw_set_line(canvas, &wt, set, refy);
         }
+        canvas.clear_clip();
+        if !is_bar(set.set_type) {
+            draw_set_symbols(canvas, &wt, graph, set, refy);
+        }
+        if set.avalue.active {
+            draw_avalues(canvas, &wt, graph, set, off, refy);
+        }
+        canvas.set_clip_view(v.xmin, v.ymin, v.xmax, v.ymax);
     }
     canvas.clear_clip();
+}
+
+/// Per-set chart layout: the horizontal group offset of side-by-side bar
+/// sets and, for stacked charts, the cumulative category totals *before*
+/// each set (the `refy` Grace passes to drawsetbars/drawsetavalues).
+#[allow(clippy::type_complexity)]
+fn chart_layout_map(graph: &Graph) -> std::collections::HashMap<usize, (f64, Option<Vec<f64>>)> {
+    let mut map = std::collections::HashMap::new();
+    if graph.graph_type != GraphType::Chart {
+        return map;
+    }
+    let bars: Vec<&Set> = graph
+        .sets
+        .iter()
+        .filter(|s| !s.hidden && is_bar(s.set_type) && !s.data.is_empty())
+        .collect();
+    if graph.stacked {
+        let all: Vec<&Set> = graph
+            .sets
+            .iter()
+            .filter(|s| !s.hidden && !s.data.is_empty())
+            .collect();
+        let cats = all.iter().map(|s| s.data.len()).max().unwrap_or(0);
+        let mut accum = vec![0.0f64; cats];
+        for set in &all {
+            map.insert(*set as *const Set as usize, (0.0, Some(accum.clone())));
+            if let Some(ys) = set.data.y() {
+                for (slot, y) in accum.iter_mut().zip(ys) {
+                    *slot += y;
+                }
+            }
+        }
+    } else {
+        let mut offset = 0.0;
+        for s in &bars {
+            offset -= 0.5 * 0.02 * s.symbol_size;
+        }
+        offset -= 0.5 * (bars.len().saturating_sub(1)) as f64 * graph.bargap;
+        for set in &bars {
+            offset += 0.5 * 0.02 * set.symbol_size;
+            map.insert(*set as *const Set as usize, (offset, None));
+            offset += 0.5 * 0.02 * set.symbol_size + graph.bargap;
+        }
+    }
+    map
+}
+
+/// Draw the annotated values at each data point (plotone.cpp
+/// `drawsetavalues`): the formatted X/Y/Z value or the per-point string,
+/// centered above the point (JUST_CENTER|JUST_BOTTOM) at `avalue offset`.
+fn draw_avalues(
+    canvas: &mut Canvas,
+    wt: &WorldTransform,
+    graph: &Graph,
+    set: &Set,
+    group_offset: f64,
+    refy: Option<&[f64]>,
+) {
+    let av = &set.avalue;
+    if av.avtype == 0 {
+        return;
+    }
+    let (Some(xs), Some(ys)) = (set.data.x(), set.data.y()) else {
+        return;
+    };
+    let n = xs.len().min(ys.len());
+    let z = set.data.cols.get(2);
+    let w = &graph.world;
+    let (wx0, wx1) = (w.xmin.min(w.xmax), w.xmin.max(w.xmax));
+    let (wy0, wy1) = (w.ymin.min(w.ymax), w.ymin.max(w.ymax));
+
+    for i in 0..n {
+        let wx = xs[i];
+        let wy = ys[i] + refy.and_then(|r| r.get(i)).copied().unwrap_or(0.0);
+        if wx < wx0 || wx > wx1 || wy < wy0 || wy > wy1 {
+            continue;
+        }
+        let value = match av.avtype {
+            1 => crate::draw::axes::format_value(wx, av.format, av.prec),
+            2 => crate::draw::axes::format_value(wy, av.format, av.prec),
+            3 => format!(
+                "{}, {}",
+                crate::draw::axes::format_value(wx, av.format, av.prec),
+                crate::draw::axes::format_value(wy, av.format, av.prec)
+            ),
+            4 => match set.data.strs.get(i).and_then(|s| s.clone()) {
+                Some(s) => s,
+                None => continue,
+            },
+            5 => match z.and_then(|c| c.get(i)) {
+                Some(&zv) => crate::draw::axes::format_value(zv, av.format, av.prec),
+                None => continue,
+            },
+            _ => continue,
+        };
+        let text = format!("{}{}{}", av.prepend, value, av.append);
+        let (vx, vy) = wt.world_to_view(wx, wy);
+        canvas.draw_text(
+            VPoint {
+                x: vx + av.offx + group_offset,
+                y: vy + av.offy,
+            },
+            &text,
+            av.size,
+            av.font,
+            av.color,
+            crate::render::HAlign::Center,
+            crate::render::VAlign::Bottom,
+            av.angle,
+        );
+    }
 }
 
 /// Draw vertical droplines from each point down to the set's baseline.
@@ -164,7 +286,13 @@ fn draw_one_bar_set(canvas: &mut Canvas, wt: &WorldTransform, set: &Set, offset:
 
 /// Fill the area of a set: the closed data polygon, or between the curve and a
 /// baseline. Drawn with the set's fill pen.
-fn draw_set_fill(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &Set) {
+fn draw_set_fill(
+    canvas: &mut Canvas,
+    wt: &WorldTransform,
+    graph: &Graph,
+    set: &Set,
+    refy: Option<&[f64]>,
+) {
     // Grace's drawsetfill only fills when a line type defines the path; bar
     // sets (and any set with line type "none") get no polygon fill.
     if set.fill_type == FillType::None
@@ -180,10 +308,23 @@ fn draw_set_fill(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &
     if n < 2 {
         return;
     }
-    let mut pts: Vec<VPoint> = Vec::with_capacity(n + 2);
-    for i in 0..n {
-        let (vx, vy) = wt.world_to_view(xs[i], ys[i]);
+    let mut pts: Vec<VPoint> = Vec::with_capacity(2 * n + 2);
+    for (i, &x) in xs[..n].iter().enumerate() {
+        let y = ys[i] + refy.and_then(|r| r.get(i)).copied().unwrap_or(0.0);
+        let (vx, vy) = wt.world_to_view(x, y);
         pts.push(VPoint { x: vx, y: vy });
+    }
+    // Stacked-chart baseline fill closes back along the previous sets' totals
+    // (drawsetfill: vps[len..2len] = reversed refy), not along a flat line.
+    if let Some(r) = refy {
+        if set.fill_type == FillType::Baseline {
+            for i in (0..n).rev() {
+                let (vx, vy) = wt.world_to_view(xs[i], r.get(i).copied().unwrap_or(0.0));
+                pts.push(VPoint { x: vx, y: vy });
+            }
+            canvas.fill_polygon_rule(&pts, set.fill_pen.color, set.fill_pen.pattern, set.fill_rule);
+            return;
+        }
     }
     if set.fill_type == FillType::Baseline {
         // Close the polygon along the baseline between the set's x extent
@@ -214,7 +355,12 @@ fn baseline_value(graph: &Graph, set: &Set, ys: &[f64], n: usize) -> f64 {
 }
 
 /// Draw the polyline connecting a set's points (if its line type calls for one).
-fn draw_set_line(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
+fn draw_set_line(
+    canvas: &mut Canvas,
+    wt: &WorldTransform,
+    set: &Set,
+    refy: Option<&[f64]>,
+) {
     if set.line_type == LineType::None || set.linestyle == 0 {
         return;
     }
@@ -232,7 +378,10 @@ fn draw_set_line(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
     // broken at domain gaps.
     let mut segment: Vec<VPoint> = Vec::with_capacity(2 * n);
     for i in 0..n {
-        let (vx, vy) = wt.world_to_view(xs[i], ys[i]);
+        // Stacked charts draw the line at the accumulated height
+        // (drawsetline: wptmp.y += refy[i]).
+        let y = ys[i] + refy.and_then(|r| r.get(i)).copied().unwrap_or(0.0);
+        let (vx, vy) = wt.world_to_view(xs[i], y);
         let p = VPoint { x: vx, y: vy };
         // Insert the stair step vertex between consecutive points.
         if let Some(&prev) = segment.last() {
@@ -250,7 +399,13 @@ fn draw_set_line(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
 }
 
 /// Draw the plot symbol at each data point of a set.
-fn draw_set_symbols(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &Set) {
+fn draw_set_symbols(
+    canvas: &mut Canvas,
+    wt: &WorldTransform,
+    graph: &Graph,
+    set: &Set,
+    refy: Option<&[f64]>,
+) {
     if set.symbol == SymbolType::None {
         return;
     }
@@ -279,13 +434,14 @@ fn draw_set_symbols(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set
     let (wy0, wy1) = (w.ymin.min(w.ymax), w.ymin.max(w.ymax));
 
     for i in 0..n {
+        let y = ys[i] + refy.and_then(|r| r.get(i)).copied().unwrap_or(0.0);
         // Grace skips symbols whose data point lies outside the world window
         // (`drawsetsyms` -> `is_validWPoint`); symbols are not clipped, so one
         // sitting on the frame edge may overhang it, exactly as in Grace.
-        if xs[i] < wx0 || xs[i] > wx1 || ys[i] < wy0 || ys[i] > wy1 {
+        if xs[i] < wx0 || xs[i] > wx1 || y < wy0 || y > wy1 {
             continue;
         }
-        let (vx, vy) = wt.world_to_view(xs[i], ys[i]);
+        let (vx, vy) = wt.world_to_view(xs[i], y);
         // Symbol radius in view units (Grace: 0.01 * symsize).
         let r = match zsize {
             Some(z) if graph.znorm != 0.0 => 0.01 * (z.get(i).copied().unwrap_or(0.0) / graph.znorm),

@@ -338,6 +338,9 @@ impl Default for Legend {
 #[derive(Debug, Clone, Default)]
 pub struct Dataset {
     pub cols: Vec<Vec<f64>>,
+    /// Optional per-point strings (trailing quoted column in data rows),
+    /// used by avalue type 4 (Grace `AVALUE_TYPE_STRING`).
+    pub strs: Vec<Option<String>>,
 }
 
 impl Dataset {
@@ -392,6 +395,48 @@ pub struct Set {
     pub baseline_type: i32,
     /// Draw a vertical line from each point down to the baseline.
     pub dropline: bool,
+    /// Annotated point values (Grace `AValue`).
+    pub avalue: AValue,
+}
+
+/// Annotated-value labels drawn at each data point (`s avalue ...`,
+/// Grace `AValue` / plotone.cpp `drawsetavalues`).
+#[derive(Debug, Clone)]
+pub struct AValue {
+    pub active: bool,
+    /// 0 none, 1 X, 2 Y, 3 XY, 4 per-point string, 5 Z column.
+    pub avtype: i32,
+    pub size: f64,
+    pub font: i32,
+    pub color: i32,
+    /// Rotation angle in degrees (`avalue rot`).
+    pub angle: f64,
+    pub format: TickFormat,
+    pub prec: i32,
+    /// Offset from the data point in view units (`avalue offset`).
+    pub offx: f64,
+    pub offy: f64,
+    pub prepend: String,
+    pub append: String,
+}
+
+impl Default for AValue {
+    fn default() -> Self {
+        AValue {
+            active: false,
+            avtype: 2,
+            size: 1.0,
+            font: 0,
+            color: 1,
+            angle: 0.0,
+            format: TickFormat::General,
+            prec: 3,
+            offx: 0.0,
+            offy: 0.0,
+            prepend: String::new(),
+            append: String::new(),
+        }
+    }
 }
 
 impl Set {
@@ -425,6 +470,7 @@ impl Set {
             fill_rule: 0,
             baseline_type: 0,
             dropline: false,
+            avalue: AValue::default(),
         }
     }
 }
