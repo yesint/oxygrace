@@ -397,6 +397,47 @@ pub struct Set {
     pub dropline: bool,
     /// Annotated point values (Grace `AValue`).
     pub avalue: AValue,
+    /// Error bars (Grace `Errbar`).
+    pub errbar: ErrBar,
+}
+
+/// Error bar properties (`s errorbar ...`; defaults from `set_default_errbar`,
+/// defaults.cpp — active by default, placement "both").
+#[derive(Debug, Clone)]
+pub struct ErrBar {
+    pub active: bool,
+    /// 0 normal (plus side), 1 opposite, 2 both.
+    pub place: i32,
+    pub color: i32,
+    /// Cap half-length factor (view length = 0.01 * size).
+    pub size: f64,
+    /// Cap line width/style.
+    pub linewidth: f64,
+    pub linestyle: i32,
+    /// Riser line width/style.
+    pub riser_linewidth: f64,
+    pub riser_linestyle: i32,
+    /// Clip overlong risers and finish them with an arrowhead.
+    pub arrow_clip: bool,
+    /// Maximum riser length in view units when clipping.
+    pub cliplen: f64,
+}
+
+impl Default for ErrBar {
+    fn default() -> Self {
+        ErrBar {
+            active: true,
+            place: 2,
+            color: 1,
+            size: 1.0,
+            linewidth: 1.0,
+            linestyle: 1,
+            riser_linewidth: 1.0,
+            riser_linestyle: 1,
+            arrow_clip: false,
+            cliplen: 0.1,
+        }
+    }
 }
 
 /// Annotated-value labels drawn at each data point (`s avalue ...`,
@@ -471,6 +512,7 @@ impl Set {
             baseline_type: 0,
             dropline: false,
             avalue: AValue::default(),
+            errbar: ErrBar::default(),
         }
     }
 }

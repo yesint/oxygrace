@@ -145,6 +145,16 @@ pub enum SetProp {
     AvOffset(f64, f64),
     AvPrepend(String),
     AvAppend(String),
+    EbOn(bool),
+    EbPlace(i32),
+    EbColor(i32),
+    EbSize(f64),
+    EbLinewidth(f64),
+    EbLinestyle(i32),
+    EbRiserLinewidth(f64),
+    EbRiserLinestyle(i32),
+    EbRiserClip(bool),
+    EbRiserClipLen(f64),
     Ignored,
 }
 
@@ -572,6 +582,7 @@ peg::parser! {
             / kw("line") __ p:set_line() { p }
             / kw("fill") __ p:set_fill() { p }
             / kw("avalue") __ p:set_avalue() { p }
+            / kw("errorbar") __ p:set_errorbar() { p }
             / kw("baseline") __ kw("type") __ n:iflex() { SetProp::BaselineType(n) }
             / kw("dropline") __ b:onoff() { SetProp::Dropline(b) }
             / kw("legend") __ s:qstring() { SetProp::Legend(s) }
@@ -614,6 +625,22 @@ peg::parser! {
             / kw("offset") __ x:num() comma() y:num() { SetProp::AvOffset(x, y) }
             / kw("prepend") __ s:qstring() { SetProp::AvPrepend(s) }
             / kw("append") __ s:qstring() { SetProp::AvAppend(s) }
+            / [_]* { SetProp::Ignored }
+
+        rule set_errorbar() -> SetProp
+            = b:onoff() { SetProp::EbOn(b) }
+            / kw("place") __ v:(
+                  kw("normal") { 0 } / kw("opposite") { 1 } / kw("both") { 2 }
+              ) { SetProp::EbPlace(v) }
+            / kw("color") __ n:iflex() { SetProp::EbColor(n) }
+            / kw("size") __ v:num() { SetProp::EbSize(v) }
+            / kw("length") __ v:num() { SetProp::EbSize(v) } // old name
+            / kw("linewidth") __ v:num() { SetProp::EbLinewidth(v) }
+            / kw("linestyle") __ n:iflex() { SetProp::EbLinestyle(n) }
+            / kw("riser") __ kw("linewidth") __ v:num() { SetProp::EbRiserLinewidth(v) }
+            / kw("riser") __ kw("linestyle") __ n:iflex() { SetProp::EbRiserLinestyle(n) }
+            / kw("riser") __ kw("clip") __ kw("length") __ v:num() { SetProp::EbRiserClipLen(v) }
+            / kw("riser") __ kw("clip") __ b:onoff() { SetProp::EbRiserClip(b) }
             / [_]* { SetProp::Ignored }
 
         rule set_fill() -> SetProp

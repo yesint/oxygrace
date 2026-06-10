@@ -45,6 +45,7 @@ pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
         if set.dropline {
             draw_droplines(canvas, &wt, graph, set);
         }
+        draw_set_errbars(canvas, &wt, graph, set, off, refy);
         if !is_bar(set.set_type) {
             draw_set_line(canvas, &wt, set, refy);
         }
@@ -169,6 +170,130 @@ fn draw_avalues(
             av.angle,
         );
     }
+}
+
+/// Error-bar column indices for dx+, dx-, dy+, dy- (`None` = absent).
+type ErrCols = (Option<usize>, Option<usize>, Option<usize>, Option<usize>);
+
+/// Error-bar column layout for a set type (drawseterrbars): indices into
+/// `data.cols` for dx+, dx-, dy+, dy-.
+fn errbar_columns(t: SetType) -> Option<ErrCols> {
+    Some(match t {
+        SetType::XyDx => (Some(2), None, None, None),
+        SetType::XyDy | SetType::BarDy => (None, None, Some(2), None),
+        SetType::XyDxDx => (Some(2), Some(3), None, None),
+        SetType::XyDyDy | SetType::BarDyDy => (None, None, Some(2), Some(3)),
+        SetType::XyDxDy => (Some(2), None, Some(3), None),
+        SetType::XyDxDxDyDy => (Some(2), Some(3), Some(4), Some(5)),
+        _ => return None,
+    })
+}
+
+/// Draw a set's error bars (literal port of plotone.cpp `drawseterrbars` /
+/// `drawerrorbar`): a riser from the point to point±delta with the riser
+/// pen, and a perpendicular cap of half-length `0.01*size` with the bar pen.
+fn draw_set_errbars(
+    canvas: &mut Canvas,
+    wt: &WorldTransform,
+    graph: &Graph,
+    set: &Set,
+    group_offset: f64,
+    refy: Option<&[f64]>,
+) {
+    let eb = &set.errbar;
+    if !eb.active {
+        return;
+    }
+    let Some(cols) = errbar_columns(set.set_type) else {
+        return;
+    };
+    let (Some(xs), Some(ys)) = (set.data.x(), set.data.y()) else {
+        return;
+    };
+    let n = xs.len().min(ys.len());
+    let col = |idx: Option<usize>| idx.and_then(|c| set.data.cols.get(c)).map(|c| c.as_slice());
+    let (mut dxp, mut dxm, mut dyp, mut dym) =
+        (col(cols.0), col(cols.1), col(cols.2), col(cols.3));
+    // Placement: "opposite" swaps the sides, "both" mirrors the plus side
+    // when no explicit minus column exists.
+    match eb.place {
+        1 => {
+            std::mem::swap(&mut dxp, &mut dxm);
+            std::mem::swap(&mut dyp, &mut dym);
+        }
+        2 => {
+            if dxm.is_none() && dym.is_none() {
+                dxm = dxp;
+                dym = dyp;
+            }
+        }
+        _ => {}
+    }
+
+    for i in 0..n {
+        let wy = ys[i] + refy.and_then(|r| r.get(i)).copied().unwrap_or(0.0);
+        let (vx, vy) = wt.world_to_view(xs[i], wy);
+        let p1 = VPoint { x: vx + group_offset, y: vy };
+        let mut bar = |wx2: f64, wy2: f64| {
+            let (v2x, v2y) = wt.world_to_view(wx2, wy2);
+            draw_one_errbar(canvas, graph, eb, p1, VPoint { x: v2x + group_offset, y: v2y });
+        };
+        if let Some(d) = dxp {
+            if let Some(&dv) = d.get(i) {
+                bar(xs[i] + dv, wy);
+            }
+        }
+        if let Some(d) = dxm {
+            if let Some(&dv) = d.get(i) {
+                bar(xs[i] - dv, wy);
+            }
+        }
+        if let Some(d) = dyp {
+            if let Some(&dv) = d.get(i) {
+                bar(xs[i], wy + dv);
+            }
+        }
+        if let Some(d) = dym {
+            if let Some(&dv) = d.get(i) {
+                bar(xs[i], wy - dv);
+            }
+        }
+    }
+}
+
+/// One riser + cap (plotone.cpp `drawerrorbar`). With `arrow_clip` on and the
+/// endpoint outside the viewport, the riser is cut at `cliplen` and finished
+/// with an open arrowhead of length `2*size`.
+fn draw_one_errbar(canvas: &mut Canvas, graph: &Graph, eb: &crate::model::ErrBar, vp1: VPoint, vp2: VPoint) {
+    let (lx, ly) = (vp2.x - vp1.x, vp2.y - vp1.y);
+    let vlength = (lx * lx + ly * ly).sqrt();
+    if vlength == 0.0 {
+        return;
+    }
+    let (ux, uy) = (lx / vlength, ly / vlength);
+    let v = graph.view;
+    let outside = vp2.x < v.xmin || vp2.x > v.xmax || vp2.y < v.ymin || vp2.y > v.ymax;
+
+    if eb.arrow_clip && outside {
+        let vp2c = VPoint {
+            x: vp1.x + eb.cliplen * ux,
+            y: vp1.y + eb.cliplen * uy,
+        };
+        canvas.draw_polyline(&[vp1, vp2c], eb.color, eb.riser_linewidth, eb.riser_linestyle);
+        // Open arrowhead, length 2*barsize (drawerrorbar: arrow.length).
+        let big_l = 0.01 * (2.0 * eb.size);
+        let vpc = VPoint { x: vp2c.x - big_l * ux, y: vp2c.y - big_l * uy };
+        let vpl = VPoint { x: vpc.x + 0.5 * big_l * uy, y: vpc.y - 0.5 * big_l * ux };
+        let vpr = VPoint { x: vpc.x - 0.5 * big_l * uy, y: vpc.y + 0.5 * big_l * ux };
+        canvas.draw_polyline(&[vpl, vp2c, vpr], eb.color, eb.linewidth, 1);
+        return;
+    }
+
+    canvas.draw_polyline(&[vp1, vp2], eb.color, eb.riser_linewidth, eb.riser_linestyle);
+    let ilen = 0.01 * eb.size;
+    let minus = VPoint { x: vp2.x - ilen * uy, y: vp2.y + ilen * ux };
+    let plus = VPoint { x: vp2.x + ilen * uy, y: vp2.y - ilen * ux };
+    canvas.draw_polyline(&[minus, plus], eb.color, eb.linewidth, eb.linestyle);
 }
 
 /// Draw vertical droplines from each point down to the set's baseline.
