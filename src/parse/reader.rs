@@ -27,6 +27,8 @@ struct Cursor {
     rows: Vec<Vec<f64>>,
     /// Whether each graph's world window was set explicitly (vs. needs autoscale).
     world_set: Vec<bool>,
+    /// Project file format version (`@version`), 0 if unspecified.
+    version: i32,
 }
 
 impl Cursor {
@@ -38,6 +40,7 @@ impl Cursor {
             data_type: SetType::Xy,
             rows: Vec::new(),
             world_set: Vec::new(),
+            version: 0,
         }
     }
 
@@ -83,8 +86,43 @@ pub fn parse_project(content: &str) -> Project {
     }
     flush_data(&mut project, &mut cur);
 
+    postprocess_version(&mut project, cur.version);
     autoscale_unset(&mut project, &cur);
     project
+}
+
+/// Apply version-dependent fixups for old file formats, mirroring Grace's
+/// `postprocess_project` (`graphs.cpp`). Old ACE/gr files stored viewports as
+/// normalized device coordinates (filling the page in both axes); Grace's
+/// current coordinate system is isotropic (both axes scaled by the shorter
+/// page side). For such files Grace forces US-Letter and rescales every
+/// viewport by the page's per-axis extent so the plot still fills the page.
+fn postprocess_version(project: &mut Project, version: i32) {
+    if version == 0 {
+        return;
+    }
+    // Pre-4.0.5 files are laid out on a US-Letter page.
+    if version < 40005 {
+        project.page_width = 792;
+        project.page_height = 612;
+    }
+    // Up to 4.1.02 viewports are normalized-device-coordinates and must be
+    // stretched into the isotropic system.
+    if version <= 40102 {
+        let w = project.page_width as f64;
+        let h = project.page_height as f64;
+        let (ex, ey) = if w < h { (1.0, h / w) } else { (w / h, 1.0) };
+        for graph in &mut project.graphs {
+            graph.view.xmin *= ex;
+            graph.view.xmax *= ex;
+            graph.view.ymin *= ey;
+            graph.view.ymax *= ey;
+            if graph.legend.loctype_view {
+                graph.legend.x *= ex;
+                graph.legend.y *= ey;
+            }
+        }
+    }
 }
 
 /// Write the accumulated data rows into the target dataset, then clear them.
@@ -119,7 +157,8 @@ fn flush_data(project: &mut Project, cur: &mut Cursor) {
 /// Apply a parsed command to the project, updating the cursor as needed.
 fn apply(project: &mut Project, cur: &mut Cursor, cmd: Command) {
     match cmd {
-        Command::Version(_) | Command::Unknown => {}
+        Command::Unknown => {}
+        Command::Version(v) => cur.version = v,
         Command::PageSize(w, h) => {
             if w >= 1.0 && h >= 1.0 {
                 project.page_width = w.round() as u32;

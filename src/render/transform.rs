@@ -39,7 +39,8 @@ impl PageTransform {
         }
     }
 
-    /// View point (0..1-ish) to device pixel (origin top-left, Y down).
+    /// View point to device pixel (origin top-left, Y down). Isotropic: both
+    /// axes scale by [`PageTransform::side`].
     pub fn view_to_device(&self, vx: f64, vy: f64) -> (f32, f32) {
         let px = vx * self.side;
         let py = self.height - vy * self.side;
