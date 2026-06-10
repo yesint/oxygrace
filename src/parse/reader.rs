@@ -313,6 +313,10 @@ fn apply_axis(axis: &mut crate::model::Axis, prop: AxisProp) {
         AxisProp::TlAngle(n) => axis.tl_angle = n,
         AxisProp::TlAppend(s) => axis.tl_append = s,
         AxisProp::TlPrepend(s) => axis.tl_prepend = s,
+        AxisProp::TlStartSpec(b) => axis.tl_start_spec = b,
+        AxisProp::TlStart(v) => axis.tl_start = v,
+        AxisProp::TlStopSpec(b) => axis.tl_stop_spec = b,
+        AxisProp::TlStop(v) => axis.tl_stop = v,
         AxisProp::Ignored => {}
     }
 }

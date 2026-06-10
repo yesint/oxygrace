@@ -86,6 +86,10 @@ pub enum AxisProp {
     TlAngle(i32),
     TlAppend(String),
     TlPrepend(String),
+    TlStartSpec(bool),
+    TlStart(f64),
+    TlStopSpec(bool),
+    TlStop(f64),
     Ignored,
 }
 
@@ -408,6 +412,10 @@ peg::parser! {
             / kw("angle") __ n:iflex() { AxisProp::TlAngle(n) }
             / kw("append") __ s:qstring() { AxisProp::TlAppend(s) }
             / kw("prepend") __ s:qstring() { AxisProp::TlPrepend(s) }
+            / kw("start") __ kw("type") __ w:word() { AxisProp::TlStartSpec(w.eq_ignore_ascii_case("spec")) }
+            / kw("start") __ n:num() { AxisProp::TlStart(n) }
+            / kw("stop") __ kw("type") __ w:word() { AxisProp::TlStopSpec(w.eq_ignore_ascii_case("spec")) }
+            / kw("stop") __ n:num() { AxisProp::TlStop(n) }
             / [_]* { AxisProp::Ignored }
 
         rule set_cmd() -> Command

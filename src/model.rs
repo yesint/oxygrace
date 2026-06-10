@@ -133,6 +133,13 @@ pub struct Axis {
     pub tl_angle: i32,
     pub tl_prepend: String,
     pub tl_append: String,
+    /// Restrict tick labels to `tl_start..=tl_stop` when the respective type is
+    /// "spec" (Grace `ticklabel start/stop type spec`); ticks themselves are
+    /// still drawn at every position.
+    pub tl_start_spec: bool,
+    pub tl_start: f64,
+    pub tl_stop_spec: bool,
+    pub tl_stop: f64,
 }
 
 impl Default for Axis {
@@ -166,6 +173,10 @@ impl Default for Axis {
             tl_angle: 0,
             tl_prepend: String::new(),
             tl_append: String::new(),
+            tl_start_spec: false,
+            tl_start: 0.0,
+            tl_stop_spec: false,
+            tl_stop: 0.0,
         }
     }
 }

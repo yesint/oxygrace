@@ -85,7 +85,9 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
 
     if axis.ticklabels {
         for &t in &majors {
-            draw_tick_label(canvas, wt, &v, is_x, t, tl_base, axis);
+            if tick_label_visible(axis, t) {
+                draw_tick_label(canvas, wt, &v, is_x, t, tl_base, axis);
+            }
         }
     }
 
@@ -96,14 +98,33 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
         // the y label is MIDDLE-justified (centered on the anchor) — see
         // tlabel1_just. The visible gap then comes from that centering plus the
         // glyph side bearings.
+        let labeled: Vec<f64> = majors
+            .iter()
+            .copied()
+            .filter(|&t| tick_label_visible(axis, t))
+            .collect();
         let tl_extent = if axis.ticklabels {
-            tick_label_extent(canvas, is_x, &majors, axis)
+            tick_label_extent(canvas, is_x, &labeled, axis)
         } else {
             0.0
         };
         let offset = tl_base + tl_extent + TL_OFFSET;
         draw_axis_label(canvas, &v, is_x, axis, offset);
     }
+}
+
+/// Whether a tick at world value `t` gets a label, honoring spec start/stop
+/// bounds (Grace `drawticks.cpp`: skip if `t < tl_start` or `t > tl_stop`),
+/// with a small tolerance so the boundary ticks themselves are kept.
+fn tick_label_visible(axis: &Axis, t: f64) -> bool {
+    let tol = |v: f64| 1e-6 * (1.0 + v.abs());
+    if axis.tl_start_spec && t < axis.tl_start - tol(axis.tl_start) {
+        return false;
+    }
+    if axis.tl_stop_spec && t > axis.tl_stop + tol(axis.tl_stop) {
+        return false;
+    }
+    true
 }
 
 /// Perpendicular extent of the tick labels (height for x-axes, max width for
@@ -211,7 +232,12 @@ fn draw_tick_label(
 /// Draw the axis label `offset` view-units beyond the axis, centered along it.
 fn draw_axis_label(canvas: &mut Canvas, v: &crate::model::View, is_x: bool, axis: &Axis, offset: f64) {
     if is_x {
-        let anchor = VPoint { x: (v.xmin + v.xmax) / 2.0, y: v.ymin - offset };
+        // Grace renders the title via Qt's full line box (JUST_TOP places the
+        // line-box top at the anchor, baseline a line-height below). Our tight
+        // glyph layout puts the glyph top at the anchor, so drop it by one
+        // label line-height to match Grace's visible position.
+        let line = canvas.text_height_view(axis.label_charsize, axis.label_font);
+        let anchor = VPoint { x: (v.xmin + v.xmax) / 2.0, y: v.ymin - offset - line };
         canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color,
             HAlign::Center, VAlign::Top, 0.0);
     } else {

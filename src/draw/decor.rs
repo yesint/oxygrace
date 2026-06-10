@@ -78,35 +78,29 @@ pub fn draw_legend(canvas: &mut Canvas, graph: &Graph) {
     let mut y_cur = ay;
     for set in entries {
         let y_mid = y_cur - em / 2.0;
-
-        // Swatch line.
-        if set.line_type != LineType::None && set.linestyle != 0 {
-            canvas.draw_polyline(
-                &[VPoint { x: ax, y: y_mid }, VPoint { x: ax + ldist, y: y_mid }],
-                set.line_pen.color,
-                set.linewidth,
-                set.linestyle,
-            );
-        }
-        // Bar/fill sets without a line get a small filled box swatch.
+        let vp = VPoint { x: ax, y: y_mid };
+        let vp2 = VPoint { x: ax + ldist, y: y_mid };
+        let vmid = VPoint { x: ax + ldist / 2.0, y: y_mid };
         let is_bar = matches!(set.set_type, SetType::Bar | SetType::BarDy | SetType::BarDyDy);
-        if is_bar || (set.line_type == LineType::None && set.symbol == crate::model::SymbolType::None) {
-            let bw = 0.01 * max_symsize.max(0.8);
-            let box_pts = [
-                VPoint { x: ax + ldist / 2.0 - bw, y: y_mid - bw },
-                VPoint { x: ax + ldist / 2.0 - bw, y: y_mid + bw },
-                VPoint { x: ax + ldist / 2.0 + bw, y: y_mid + bw },
-                VPoint { x: ax + ldist / 2.0 + bw, y: y_mid - bw },
-            ];
-            if set.symbol_fill.pattern != 0 {
-                canvas.fill_polygon(&box_pts, set.symbol_fill.color, set.symbol_fill.pattern);
+
+        // Grace's putlegends: with a line, draw it and place the swatch at both
+        // ends; without a line, a single swatch at the midpoint. Bar/boxplot
+        // sets use a rectangle swatch, others the set symbol.
+        let has_line = ldist > 0.0 && set.line_type != LineType::None && set.linestyle != 0;
+        if has_line {
+            canvas.draw_polyline(&[vp, vp2], set.line_pen.color, set.linewidth, set.linestyle);
+            if is_bar {
+                draw_bar_swatch(canvas, set, vp, l.charsize);
+                draw_bar_swatch(canvas, set, vp2, l.charsize);
+            } else {
+                sets::draw_symbol_at(canvas, set, vp);
+                sets::draw_symbol_at(canvas, set, vp2);
             }
-            let mut closed = box_pts.to_vec();
-            closed.push(box_pts[0]);
-            canvas.draw_polyline(&closed, set.symbol_pen.color, set.symbol_linewidth, 1);
+        } else if is_bar {
+            draw_bar_swatch(canvas, set, vmid, l.charsize);
+        } else {
+            sets::draw_symbol_at(canvas, set, vmid);
         }
-        // Symbol at the swatch midpoint.
-        sets::draw_symbol_at(canvas, set, VPoint { x: ax + ldist / 2.0, y: y_mid });
 
         // Label text, baseline-top aligned at the row top.
         canvas.draw_text(
@@ -121,5 +115,27 @@ pub fn draw_legend(canvas: &mut Canvas, graph: &Graph) {
         );
 
         y_cur -= row;
+    }
+}
+
+/// Draw a bar set's legend swatch (Grace `drawlegbarsym`): a rectangle
+/// `0.02*symsize` wide × `0.02*legend_charsize` tall, filled with the symbol
+/// fill pen and outlined with the symbol pen.
+fn draw_bar_swatch(canvas: &mut Canvas, set: &crate::model::Set, center: VPoint, charsize: f64) {
+    let hw = 0.01 * set.symbol_size;
+    let hh = 0.01 * charsize;
+    let rect = [
+        VPoint { x: center.x - hw, y: center.y - hh },
+        VPoint { x: center.x - hw, y: center.y + hh },
+        VPoint { x: center.x + hw, y: center.y + hh },
+        VPoint { x: center.x + hw, y: center.y - hh },
+    ];
+    if set.symbol_fill.pattern != 0 {
+        canvas.fill_polygon(&rect, set.symbol_fill.color, set.symbol_fill.pattern);
+    }
+    if set.symbol_linestyle != 0 {
+        let mut closed = rect.to_vec();
+        closed.push(rect[0]);
+        canvas.draw_polyline(&closed, set.symbol_pen.color, set.symbol_linewidth, set.symbol_linestyle);
     }
 }

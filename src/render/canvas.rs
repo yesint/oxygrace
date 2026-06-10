@@ -206,10 +206,12 @@ impl<'a> Canvas<'a> {
         charsize * crate::render::transform::MAGIC_FONT_SCALE
     }
 
-    /// Approximate rendered text height (ascent) in view units — the
-    /// perpendicular extent of a tick label, used to place axis labels.
+    /// Text line height (ascent − descent) in view units. Grace accumulates
+    /// tick-label bounding boxes using full font metrics (the em box, including
+    /// descent/leading), so axis-label placement uses this, not the tight
+    /// glyph extent.
     pub fn text_height_view(&self, charsize: f64, font: i32) -> f64 {
-        self.fonts.ascent(font) as f64 * self.em_view(charsize)
+        (self.fonts.ascent(font) as f64 - self.fonts.descent(font) as f64) * self.em_view(charsize)
     }
 
     /// Fill a circle (center + radius in view units) with a color and pattern.
