@@ -90,16 +90,18 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
     }
 
     if !axis.label.is_empty() {
-        // Place the axis label beyond the tick-label bounding box, leaving a
-        // margin of about one tick-label em (matching Grace's visible gap and
-        // clearing the rotated y-label's descenders).
+        // Grace places the axis label `tl_offset` beyond the tick-label bounding
+        // box (graphs.cpp/drawticks.cpp: vp_label_offset = (vbase - bb_edge) +
+        // tl_offset). The x label is TOP-justified (its top edge at the anchor);
+        // the y label is MIDDLE-justified (centered on the anchor) — see
+        // tlabel1_just. The visible gap then comes from that centering plus the
+        // glyph side bearings.
         let tl_extent = if axis.ticklabels {
             tick_label_extent(canvas, is_x, &majors, axis)
         } else {
             0.0
         };
-        let margin = canvas.em_view(axis.tl_charsize.max(axis.label_charsize));
-        let offset = tl_base + tl_extent + margin;
+        let offset = tl_base + tl_extent + TL_OFFSET;
         draw_axis_label(canvas, &v, is_x, axis, offset);
     }
 }
@@ -213,11 +215,13 @@ fn draw_axis_label(canvas: &mut Canvas, v: &crate::model::View, is_x: bool, axis
         canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color,
             HAlign::Center, VAlign::Top, 0.0);
     } else {
-        // Rotated 90°: baseline alignment puts the text body to the left of the
-        // anchor (away from the axis), so the anchor is the label's near edge.
-        let anchor = VPoint { x: v.xmin - offset, y: (v.ymin + v.ymax) / 2.0 };
+        // Rotated 90° and centered perpendicular (Grace's JUST_MIDDLE). The
+        // anchor is the label's center, so push it out by half the label em
+        // beyond the `offset` near-edge position to keep the `tl_offset` gap.
+        let half_em = canvas.em_view(axis.label_charsize) / 2.0;
+        let anchor = VPoint { x: v.xmin - offset - half_em, y: (v.ymin + v.ymax) / 2.0 };
         canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color,
-            HAlign::Center, VAlign::Baseline, 90.0);
+            HAlign::Center, VAlign::Middle, 90.0);
     }
 }
 
