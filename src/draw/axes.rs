@@ -577,6 +577,76 @@ pub fn format_value(value: f64, format: TickFormat, prec: i32) -> String {
             };
             format!("{:.*} {}", prec, v / 10f64.powf(exponent), prefix)
         }
+        // Geographic degrees (utils.cpp FORMAT_DEGREESLON/LAT): the absolute
+        // value with a hemisphere suffix; exactly "0" at zero.
+        TickFormat::DegreesLon | TickFormat::DegreesLat => {
+            let lat = format == TickFormat::DegreesLat;
+            if v == 0.0 {
+                "0".to_string()
+            } else if v < 0.0 {
+                format!("{:.*}{}", prec, -v, if lat { "S" } else { "W" })
+            } else {
+                format!("{:.*}{}", prec, v, if lat { "N" } else { "E" })
+            }
+        }
+        // Date/time formats: `v` is an astronomical Julian date. Year fields
+        // use two digits, matching gracebat's rendering of times.agr.
+        TickFormat::MmDdYy => {
+            let (y, m, d, ..) = crate::dates::jul_to_cal_and_time(v, crate::dates::ROUND_DAY);
+            format!("{:02}-{:02}-{:02}", m, d, (y % 100 + 100) % 100)
+        }
+        TickFormat::DdMmYy => {
+            let (y, m, d, ..) = crate::dates::jul_to_cal_and_time(v, crate::dates::ROUND_DAY);
+            format!("{:02}-{:02}-{:02}", d, m, (y % 100 + 100) % 100)
+        }
+        TickFormat::YyMmDd => {
+            let (y, m, d, ..) = crate::dates::jul_to_cal_and_time(v, crate::dates::ROUND_DAY);
+            format!("{:02}-{:02}-{:02}", (y % 100 + 100) % 100, m, d)
+        }
+        TickFormat::MmYy => {
+            let (y, m, ..) = crate::dates::jul_to_cal_and_time(v, crate::dates::ROUND_MONTH);
+            format!("{:02}-{:02}", m, (y % 100 + 100) % 100)
+        }
+        TickFormat::MmDd => {
+            let (_, m, d, ..) = crate::dates::jul_to_cal_and_time(v, crate::dates::ROUND_DAY);
+            format!("{:02}-{:02}", m, d)
+        }
+        TickFormat::MonthDay => {
+            let (_, m, d, ..) = crate::dates::jul_to_cal_and_time(v, crate::dates::ROUND_DAY);
+            format!("{}-{:02}", crate::dates::MONTHS[(m as usize - 1).min(11)], d)
+        }
+        TickFormat::DayMonth => {
+            let (_, m, d, ..) = crate::dates::jul_to_cal_and_time(v, crate::dates::ROUND_DAY);
+            format!("{:02}-{}", d, crate::dates::MONTHS[(m as usize - 1).min(11)])
+        }
+        TickFormat::Months => {
+            let (_, m, ..) = crate::dates::jul_to_cal_and_time(v, crate::dates::ROUND_MONTH);
+            crate::dates::MONTHS[(m as usize - 1).min(11)].to_string()
+        }
+        TickFormat::MonthsY => {
+            let (y, m, ..) = crate::dates::jul_to_cal_and_time(v, crate::dates::ROUND_MONTH);
+            format!(
+                "{}-{:02}",
+                crate::dates::MONTHS[(m as usize - 1).min(11)],
+                (y % 100 + 100) % 100
+            )
+        }
+        TickFormat::MonthL => {
+            let (_, m, ..) = crate::dates::jul_to_cal_and_time(v, crate::dates::ROUND_MONTH);
+            crate::dates::MONTHL[(m as usize - 1).min(11)].to_string()
+        }
+        TickFormat::DayOfWeekS => crate::dates::DAYOFWEEKS[crate::dates::dayofweek(v)].to_string(),
+        TickFormat::DayOfWeekL => crate::dates::DAYOFWEEKL[crate::dates::dayofweek(v)].to_string(),
+        TickFormat::DayOfYear => {
+            let (y, m, d, ..) = crate::dates::jul_to_cal_and_time(v, crate::dates::ROUND_DAY);
+            let doy = 1 + crate::dates::cal_to_jul(y, m, d) - crate::dates::cal_to_jul(y, 1, 1);
+            format!("{}", doy)
+        }
+        TickFormat::Hms => {
+            let (_, _, _, h, m, s) =
+                crate::dates::jul_to_cal_and_time(v, crate::dates::ROUND_SECOND);
+            format!("{:02}:{:02}:{:02}", h, m, s)
+        }
         TickFormat::Computing => {
             // Powers of 1024 with K/M/G… suffix (FORMAT_COMPUTING).
             let mut exponent = if v != 0.0 {

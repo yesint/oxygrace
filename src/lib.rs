@@ -13,6 +13,7 @@
 use std::path::Path;
 
 pub mod color;
+pub mod dates;
 pub mod draw;
 pub mod font;
 pub mod model;

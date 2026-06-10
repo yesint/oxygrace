@@ -186,6 +186,24 @@ pub enum TickFormat {
     Scientific,
     Engineering,
     Computing,
+    /// Geographic longitude/latitude degrees (`110E`, `10S`).
+    DegreesLon,
+    DegreesLat,
+    /// Date/time formats over astronomical Julian dates.
+    MmDdYy,
+    DdMmYy,
+    YyMmDd,
+    MmYy,
+    MmDd,
+    MonthDay,
+    DayMonth,
+    Months,
+    MonthsY,
+    MonthL,
+    DayOfWeekS,
+    DayOfWeekL,
+    DayOfYear,
+    Hms,
 }
 
 impl TickFormat {
@@ -200,6 +218,22 @@ impl TickFormat {
             "scientific" => Scientific,
             "engineering" => Engineering,
             "computing" => Computing,
+            "degreeslon" => DegreesLon,
+            "degreeslat" => DegreesLat,
+            "mmddyy" => MmDdYy,
+            "ddmmyy" => DdMmYy,
+            "yymmdd" => YyMmDd,
+            "mmyy" => MmYy,
+            "mmdd" => MmDd,
+            "monthday" => MonthDay,
+            "daymonth" => DayMonth,
+            "months" => Months,
+            "monthsy" => MonthsY,
+            "monthl" => MonthL,
+            "dayofweeks" => DayOfWeekS,
+            "dayofweekl" => DayOfWeekL,
+            "dayofyear" => DayOfYear,
+            "hms" => Hms,
             _ => return None,
         })
     }
