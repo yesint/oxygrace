@@ -25,12 +25,15 @@ pub use model::Project;
 
 /// Parse a `.agr`/`.xvg` file from disk into a [`Project`].
 ///
-/// The file is decoded as UTF-8 leniently: invalid byte sequences (e.g. legacy
-/// Latin-1 files) are replaced rather than rejected, so older Grace files still
-/// load.
+/// The file is decoded as UTF-8 when valid; otherwise it is decoded as
+/// Latin-1 (every byte maps to the same code point), which is what
+/// Grace-era files use for characters like the degree sign.
 pub fn load<P: AsRef<Path>>(path: P) -> std::io::Result<Project> {
     let bytes = std::fs::read(path)?;
-    let content = String::from_utf8_lossy(&bytes);
+    let content = match std::str::from_utf8(&bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => bytes.iter().map(|&b| b as char).collect(),
+    };
     Ok(load_str(&content))
 }
 

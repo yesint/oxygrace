@@ -499,6 +499,7 @@ fn apply_axis(axis: &mut crate::model::Axis, prop: AxisProp) {
         AxisProp::TlActive(b) => axis.ticklabels = b,
         AxisProp::TlPrec(n) => axis.tl_prec = n,
         AxisProp::TlSkip(n) => axis.tl_skip = n.max(0),
+        AxisProp::TlFormula(f) => axis.tl_formula = f,
         AxisProp::SpecType(t) => axis.spec_type = t,
         // Old "tick type spec": positions specified; keep BOTH if labels
         // were already specified (pars.yacc tickattr TYPE SPEC).

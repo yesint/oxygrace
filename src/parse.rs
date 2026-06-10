@@ -3,6 +3,7 @@
 //! [`data`] rows.
 
 pub mod data;
+pub mod formula;
 pub mod grammar;
 pub mod reader;
 

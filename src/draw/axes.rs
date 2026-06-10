@@ -278,6 +278,13 @@ fn tick_label_text(axis: &Axis, t: f64) -> String {
             return l.clone();
         }
     }
+    // The formula transforms the value before formatting (drawticks.cpp
+    // evaluates tl_formula over the major tick positions with $t bound).
+    let t = if axis.tl_formula.is_empty() {
+        t
+    } else {
+        crate::parse::formula::eval(&axis.tl_formula, t).unwrap_or(t)
+    };
     format!(
         "{}{}{}",
         axis.tl_prepend,

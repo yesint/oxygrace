@@ -155,6 +155,9 @@ pub struct Axis {
     /// still drawn at every position.
     /// Label every (skip+1)-th major tick (`ticklabel skip`).
     pub tl_skip: i32,
+    /// Transform applied to major tick values before formatting
+    /// (`ticklabel formula "$t-273.15"`); empty = identity.
+    pub tl_formula: String,
     /// Specified ticks (Grace `TICKS_SPEC_*`): 0 = generated, 1 = positions
     /// from `spec_ticks`, 2 = positions and labels from `spec_ticks`.
     pub spec_type: i32,
@@ -208,6 +211,7 @@ impl Default for Axis {
             tl_prepend: String::new(),
             tl_append: String::new(),
             tl_skip: 0,
+            tl_formula: String::new(),
             spec_type: 0,
             spec_count: 0,
             spec_ticks: Vec::new(),

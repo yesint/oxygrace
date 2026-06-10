@@ -94,6 +94,7 @@ pub enum AxisProp {
     TlAppend(String),
     TlPrepend(String),
     TlSkip(i32),
+    TlFormula(String),
     /// `tick spec type none|ticks|both` -> 0/1/2 (also the old
     /// `tick type spec` / `ticklabel type spec` forms).
     SpecType(i32),
@@ -581,6 +582,7 @@ peg::parser! {
             / kw("type") __ kw("auto") { AxisProp::SpecLabelsAutoOld }
             / kw("prec") __ n:iflex() { AxisProp::TlPrec(n) }
             / kw("skip") __ n:iflex() { AxisProp::TlSkip(n) }
+            / kw("formula") __ s:qstring() { AxisProp::TlFormula(s) }
             / kw("format") __ w:word() {
                 AxisProp::TlFormat(TickFormat::parse(w).unwrap_or(TickFormat::Decimal))
             }
