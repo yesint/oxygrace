@@ -25,14 +25,17 @@ pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
             continue;
         }
         // Fill is drawn under the line, then symbols on top (Grace order).
+        // Bar-type sets are rendered entirely by draw_bars: Grace never draws
+        // a connecting line or symbols for them, even if those properties are
+        // set in the file.
         draw_set_fill(canvas, &wt, graph, set);
         if set.dropline {
             draw_droplines(canvas, &wt, graph, set);
         }
         if !is_bar(set.set_type) {
             draw_set_line(canvas, &wt, set);
+            draw_set_symbols(canvas, &wt, graph, set);
         }
-        draw_set_symbols(canvas, &wt, graph, set);
     }
 }
 
