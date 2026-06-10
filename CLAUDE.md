@@ -201,7 +201,7 @@ Gaps found by baseline comparison, prioritized:
 - Fix: old (pre-`@target`) files attach inline data to the current graph's set 0.
 - *Deferred to later: SYM_CHAR glyph symbols, segment2/3 line types, hatch fill patterns.*
 
-**M3 (done except alt/zero axes):**
+**M3 (done):**
 - Log scale tick generation + labels (decades/octaves, minors 2..9), autotick
   fallback (nicenum), `tick place rounded`, `ticklabel skip`, power /
   scientific / engineering / computing label formats.
@@ -210,9 +210,10 @@ Gaps found by baseline comparison, prioritized:
 - Annotation objects: string, line (with arrows), box, ellipse, timestamp.
 - Specified ticks/labels (`tick spec`, `ticklabel IDX, "..."`, old
   `tick/ticklabel type spec` forms).
-- *Still open:* alt axes (offset bars), zero axes (`axes.agr`),
-  `ticklabel formula` ($t expressions, reciprocal.agr), geographic/date
-  tick formats (au.agr, times.agr).
+- Zero/alt axes with offsets and per-side placement (tick op /
+  ticklabel op / label op); `ticklabel formula` ($t arithmetic);
+  geographic (degreeslon/lat) and date/time formats (src/dates.rs,
+  Julian-date conversions).
 
 **M4 (partial):**
 - Done: error bars (all xy d* types, riser clip arrows); full markup engine
