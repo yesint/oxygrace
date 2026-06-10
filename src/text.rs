@@ -218,3 +218,26 @@ pub fn layout(fonts: &FontSet, input: &str, base_font: i32) -> Layout {
 pub fn measure(fonts: &FontSet, input: &str, base_font: i32) -> f32 {
     layout(fonts, input, base_font).width
 }
+
+/// Rendered ink bounding box of a marked-up string, in em units of the base
+/// size: `(x_min, y_min, x_max, y_max)`, baseline-left origin, Y up. This is
+/// the union of the positioned glyph outlines (mirrors Grace's `update_bbox`),
+/// so it accounts for actual glyph extents, ascenders/descenders, and the
+/// baseline shifts and scaling from sub/superscript markup. `None` if no glyph
+/// has an outline (e.g. all spaces or an empty string).
+pub fn bbox(fonts: &FontSet, input: &str, base_font: i32) -> Option<(f32, f32, f32, f32)> {
+    let layout = layout(fonts, input, base_font);
+    let mut found = false;
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for g in &layout.glyphs {
+        if let Some((gx0, gy0, gx1, gy1)) = fonts.glyph_bbox(g.font, g.ch) {
+            // Glyph origin sits at pen x = g.x, baseline shifted by g.y, scaled.
+            x0 = x0.min(g.x + gx0 * g.scale);
+            x1 = x1.max(g.x + gx1 * g.scale);
+            y0 = y0.min(g.y + gy0 * g.scale);
+            y1 = y1.max(g.y + gy1 * g.scale);
+            found = true;
+        }
+    }
+    found.then_some((x0, y0, x1, y1))
+}

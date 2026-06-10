@@ -127,25 +127,27 @@ fn tick_label_visible(axis: &Axis, t: f64) -> bool {
     true
 }
 
-/// Perpendicular extent of the tick labels (height for x-axes, max width for
-/// y-axes), in view units.
+/// Perpendicular extent of the rendered tick labels in view units — the max
+/// ink height for x-axes (labels stack below), the max ink width for y-axes
+/// (labels extend left). This is the tick-label side of Grace's `bb`.
 fn tick_label_extent(canvas: &Canvas, is_x: bool, majors: &[f64], axis: &Axis) -> f64 {
-    if is_x {
-        canvas.text_height_view(axis.tl_charsize, axis.tl_font)
-    } else {
-        majors
-            .iter()
-            .map(|&t| {
-                let s = format!(
-                    "{}{}{}",
-                    axis.tl_prepend,
-                    format_value(t, axis.tl_format, axis.tl_prec),
-                    axis.tl_append
-                );
-                canvas.text_width_view(&s, axis.tl_charsize, axis.tl_font)
-            })
-            .fold(0.0, f64::max)
-    }
+    majors
+        .iter()
+        .map(|&t| {
+            let s = format!(
+                "{}{}{}",
+                axis.tl_prepend,
+                format_value(t, axis.tl_format, axis.tl_prec),
+                axis.tl_append
+            );
+            let (x0, y0, x1, y1) = canvas.text_bbox_view(&s, axis.tl_charsize, axis.tl_font);
+            if is_x {
+                y1 - y0
+            } else {
+                x1 - x0
+            }
+        })
+        .fold(0.0, f64::max)
 }
 
 /// Map a tick value to its view position on the axis (returns view x and y).
@@ -229,25 +231,21 @@ fn draw_tick_label(
     }
 }
 
-/// Draw the axis label `offset` view-units beyond the axis, centered along it.
+/// Draw the axis label at perpendicular distance `offset` from the axis,
+/// centered along it. Mirrors Grace's `drawticks.cpp`: the x label is drawn
+/// `JUST_CENTER|JUST_TOP` at angle 0, the y label `JUST_RIGHT|JUST_MIDDLE` at
+/// angle 90 (for the default parallel layout). `draw_text` positions each label
+/// by its rendered bounding box, so the placement follows the real glyph
+/// extents — no per-string constants.
 fn draw_axis_label(canvas: &mut Canvas, v: &crate::model::View, is_x: bool, axis: &Axis, offset: f64) {
     if is_x {
-        // Grace renders the title via Qt's full line box (JUST_TOP places the
-        // line-box top at the anchor, baseline a line-height below). Our tight
-        // glyph layout puts the glyph top at the anchor, so drop it by one
-        // label line-height to match Grace's visible position.
-        let line = canvas.text_height_view(axis.label_charsize, axis.label_font);
-        let anchor = VPoint { x: (v.xmin + v.xmax) / 2.0, y: v.ymin - offset - line };
+        let anchor = VPoint { x: (v.xmin + v.xmax) / 2.0, y: v.ymin - offset };
         canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color,
             HAlign::Center, VAlign::Top, 0.0);
     } else {
-        // Rotated 90° and centered perpendicular (Grace's JUST_MIDDLE). The
-        // anchor is the label's center, so push it out by half the label em
-        // beyond the `offset` near-edge position to keep the `tl_offset` gap.
-        let half_em = canvas.em_view(axis.label_charsize) / 2.0;
-        let anchor = VPoint { x: v.xmin - offset - half_em, y: (v.ymin + v.ymax) / 2.0 };
+        let anchor = VPoint { x: v.xmin - offset, y: (v.ymin + v.ymax) / 2.0 };
         canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color,
-            HAlign::Center, VAlign::Middle, 90.0);
+            HAlign::Right, VAlign::Middle, 90.0);
     }
 }
 

@@ -122,6 +122,21 @@ impl FontSet {
         }
     }
 
+    /// Glyph ink bounding box in em units `(x_min, y_min, x_max, y_max)`,
+    /// Y up with the baseline at 0. `None` for missing/empty glyphs (spaces).
+    pub fn glyph_bbox(&self, slot: i32, ch: char) -> Option<(f32, f32, f32, f32)> {
+        let face = self.face(slot);
+        let gid = face.glyph_index(ch)?;
+        let r = face.glyph_bounding_box(gid)?;
+        let s = 1.0 / face.units_per_em() as f32;
+        Some((
+            r.x_min as f32 * s,
+            r.y_min as f32 * s,
+            r.x_max as f32 * s,
+            r.y_max as f32 * s,
+        ))
+    }
+
     /// Ascent of a slot in em units (for vertical centering of labels).
     pub fn ascent(&self, slot: i32) -> f32 {
         let face = self.face(slot);

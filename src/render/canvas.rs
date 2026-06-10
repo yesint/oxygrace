@@ -206,6 +206,20 @@ impl<'a> Canvas<'a> {
         charsize * crate::render::transform::MAGIC_FONT_SCALE
     }
 
+    /// Rendered ink bounding box of a marked-up string in view units:
+    /// `(x_min, y_min, x_max, y_max)`, baseline-left origin, Y up. Empty
+    /// strings give a zero box. Built from the positioned glyph outlines,
+    /// mirroring Grace's `update_bbox`.
+    pub fn text_bbox_view(&self, s: &str, charsize: f64, font: i32) -> (f64, f64, f64, f64) {
+        match text::bbox(self.fonts, s, font) {
+            Some((x0, y0, x1, y1)) => {
+                let e = self.em_view(charsize);
+                (x0 as f64 * e, y0 as f64 * e, x1 as f64 * e, y1 as f64 * e)
+            }
+            None => (0.0, 0.0, 0.0, 0.0),
+        }
+    }
+
     /// Text line height (ascent − descent) in view units. Grace accumulates
     /// tick-label bounding boxes using full font metrics (the em box, including
     /// descent/leading), so axis-label placement uses this, not the tight
@@ -274,41 +288,67 @@ impl<'a> Canvas<'a> {
         }
         let em_px = self.page.fontsize_px(charsize);
         let (ax, ay) = self.page.view_to_device(anchor.x, anchor.y);
-
-        // Alignment offsets in text space (y up).
-        let halign_off = match halign {
-            HAlign::Left => 0.0,
-            HAlign::Center => layout.width * em_px / 2.0,
-            HAlign::Right => layout.width * em_px,
-        };
-        let ascent = self.fonts.ascent(base_font) * em_px;
-        let descent = self.fonts.descent(base_font) * em_px; // negative
-        let valign_off = match valign {
-            VAlign::Baseline => 0.0,
-            VAlign::Bottom => descent,
-            VAlign::Middle => (ascent + descent) / 2.0,
-            VAlign::Top => ascent,
-        };
-
         let theta = angle.to_radians() as f32;
         let (sin, cos) = (theta.sin(), theta.cos());
-        let default_color = color::resolve(self.project, color).to_skia();
+        let rot = |x: f32, y: f32| (x * cos - y * sin, x * sin + y * cos);
 
+        // Axis-aligned bounding box of the *rotated* glyph outlines, in em
+        // units (Y up) — Grace's `bbox_ll`/`bbox_ur` accumulated in WriteString.
+        let (mut bx0, mut by0, mut bx1, mut by1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        let mut any = false;
+        for g in &layout.glyphs {
+            if let Some((gx0, gy0, gx1, gy1)) = self.fonts.glyph_bbox(g.font, g.ch) {
+                for &(cx, cy) in &[(gx0, gy0), (gx1, gy0), (gx1, gy1), (gx0, gy1)] {
+                    let (rx, ry) = rot(g.x + cx * g.scale, g.y + cy * g.scale);
+                    bx0 = bx0.min(rx);
+                    by0 = by0.min(ry);
+                    bx1 = bx1.max(rx);
+                    by1 = by1.max(ry);
+                    any = true;
+                }
+            }
+        }
+        if !any {
+            return;
+        }
+
+        // The (hfudge, vfudge) fraction of the bbox lands on the anchor
+        // (Grace's `offset = bbox_ll + fudge*(bbox_ur - bbox_ll) - vp`).
+        // JUST_BLINE positions by the rotated baseline instead of the bbox.
+        let hfudge = match halign {
+            HAlign::Left => 0.0,
+            HAlign::Center => 0.5,
+            HAlign::Right => 1.0,
+        };
+        let (fx, fy) = if matches!(valign, VAlign::Baseline) {
+            let (sx, sy) = rot(layout.width, 0.0);
+            (hfudge * sx, hfudge * sy)
+        } else {
+            let vfudge = match valign {
+                VAlign::Bottom => 0.0,
+                VAlign::Middle => 0.5,
+                VAlign::Top => 1.0,
+                VAlign::Baseline => 0.0,
+            };
+            (bx0 + hfudge * (bx1 - bx0), by0 + vfudge * (by1 - by0))
+        };
+
+        let default_color = color::resolve(self.project, color).to_skia();
         for g in &layout.glyphs {
             let outline = self.fonts.outline_char(g.font, g.ch);
             let Some(path) = outline.path else { continue };
-            let sx = em_px * g.scale;
-            // Per-glyph text-space origin (before rotation), y up.
-            let cx = em_px * g.x - halign_off;
-            let cy = em_px * g.y - valign_off;
-            // Compose: glyph-em (y up) -> rotate -> device (y down) -> anchor.
+            let s = g.scale;
+            // Map glyph outline (em, Y up): scale, place at pen, rotate, then
+            // translate so the fudge point sits at the device anchor (Y down).
+            let tx = ax + em_px * ((g.x * cos - g.y * sin) - fx);
+            let ty = ay - em_px * ((g.x * sin + g.y * cos) - fy);
             let ts = Transform::from_row(
-                cos * sx,
-                -sin * sx,
-                -sin * sx,
-                -cos * sx,
-                ax + cos * cx - sin * cy,
-                ay - sin * cx - cos * cy,
+                em_px * s * cos,
+                -em_px * s * sin,
+                -em_px * s * sin,
+                -em_px * s * cos,
+                tx,
+                ty,
             );
             let Some(tpath) = path.transform(ts) else {
                 continue;
