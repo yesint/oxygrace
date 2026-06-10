@@ -122,10 +122,22 @@ pub struct Axis {
     /// Round the first major tick down to a multiple of the spacing
     /// (`tick place rounded`, Grace `t_round`; default true).
     pub tick_round: bool,
-    /// Ticks point inward (`true`) or outward.
-    pub ticks_in: bool,
+    /// Tick direction (`tick in|out|both`): 0 in, 1 out, 2 both.
+    pub tick_inout: i32,
     /// Bar/tick placement (`tick op`): 0 normal edge, 1 opposite, 2 both.
     pub op: i32,
+    /// Tick label placement (`ticklabel op`).
+    pub tl_op: i32,
+    /// Axis label placement (`label op`).
+    pub label_op: i32,
+    /// Axis sits at world zero of the perpendicular coordinate
+    /// (`type zero`; drawticks.cpp `t->zero`). Skipped when 0 is outside
+    /// the world window.
+    pub zero: bool,
+    /// Outward shifts of the normal / opposite axis positions in view units
+    /// (`axis offset X , Y`; drawticks.cpp `offsx`/`offsy`).
+    pub offs_normal: f64,
+    pub offs_opposite: f64,
     pub major_props: TickProps,
     pub minor_props: TickProps,
     /// Whether numeric tick labels are drawn.
@@ -174,8 +186,13 @@ impl Default for Axis {
             minor_ticks: 1,
             autonum: 6,
             tick_round: true,
-            ticks_in: true,
+            tick_inout: 0,
             op: 2,
+            tl_op: 0,
+            label_op: 0,
+            zero: false,
+            offs_normal: 0.0,
+            offs_opposite: 0.0,
             major_props: TickProps::default(),
             minor_props: TickProps {
                 size: 0.5,

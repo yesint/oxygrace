@@ -87,46 +87,94 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
         }
     }
 
-    // Axis bar along the frame edge(s): at the normal edge, the opposite
-    // edge, or both, per `tick op` (drawticks.cpp t_drawbar / t_op).
+    // --- Axis geometry (drawticks.cpp drawaxes): every axis has a normal
+    // side (vbase1, at the lower/left world edge) and an opposite side
+    // (vbase2); `axis offset` pushes them outward. A zero axis puts both at
+    // world 0 of the perpendicular coordinate and flips the tick direction
+    // (tick_dir_sign = -1); it is skipped when 0 is outside the window.
+    let (vbase1, vbase2, sign) = if axis.zero {
+        let (pmin, pmax) = if is_x {
+            (graph.world.ymin, graph.world.ymax)
+        } else {
+            (graph.world.xmin, graph.world.xmax)
+        };
+        if !(pmin.min(pmax) <= 0.0 && 0.0 <= pmin.max(pmax)) {
+            return;
+        }
+        let v0 = if is_x { wt.y_to_view(0.0) } else { wt.x_to_view(0.0) };
+        (v0 - axis.offs_normal, v0 + axis.offs_opposite, -1.0)
+    } else {
+        let (e1, e2) = if is_x { (v.ymin, v.ymax) } else { (v.xmin, v.xmax) };
+        (e1 - axis.offs_normal, e2 + axis.offs_opposite, 1.0)
+    };
+    // Extent along the axis and a (along, perpendicular) -> view point helper.
+    let (amin, amax) = if is_x { (v.xmin, v.xmax) } else { (v.ymin, v.ymax) };
+    let pt = |along: f64, perp: f64| {
+        if is_x {
+            VPoint { x: along, y: perp }
+        } else {
+            VPoint { x: perp, y: along }
+        }
+    };
+    let along_of = |t: f64| if is_x { wt.x_to_view(t) } else { wt.y_to_view(t) };
+    let on_normal = axis.op != 1;
+    let on_opposite = axis.op != 0;
+
+    // Axis bar on the chosen side(s) (t_drawbar / t_op).
     if axis.draw_bar {
-        if axis.op == 0 || axis.op == 2 {
-            let (a, b) = if is_x {
-                (VPoint { x: v.xmin, y: v.ymin }, VPoint { x: v.xmax, y: v.ymin })
-            } else {
-                (VPoint { x: v.xmin, y: v.ymin }, VPoint { x: v.xmin, y: v.ymax })
-            };
-            canvas.draw_polyline(&[a, b], axis.bar_color, axis.bar_linewidth, axis.bar_linestyle);
+        if on_normal {
+            canvas.draw_polyline(
+                &[pt(amin, vbase1), pt(amax, vbase1)],
+                axis.bar_color,
+                axis.bar_linewidth,
+                axis.bar_linestyle,
+            );
         }
-        if axis.op == 1 || axis.op == 2 {
-            let (a, b) = if is_x {
-                (VPoint { x: v.xmin, y: v.ymax }, VPoint { x: v.xmax, y: v.ymax })
-            } else {
-                (VPoint { x: v.xmax, y: v.ymin }, VPoint { x: v.xmax, y: v.ymax })
-            };
-            canvas.draw_polyline(&[a, b], axis.bar_color, axis.bar_linewidth, axis.bar_linestyle);
+        if on_opposite {
+            canvas.draw_polyline(
+                &[pt(amin, vbase2), pt(amax, vbase2)],
+                axis.bar_color,
+                axis.bar_linewidth,
+                axis.bar_linestyle,
+            );
         }
     }
 
+    // Tick marks: start/stop per side from the in/out/both switch
+    // (drawticks.cpp t_inout; the zero-axis sign flips the direction).
     if axis.ticks {
-        let sign = if axis.ticks_in { 1.0 } else { -1.0 };
-        // Minor then major ticks (both on the two opposite edges, as Grace's
-        // default `tick op both`).
-        for &t in &minors {
-            draw_tick(canvas, wt, &v, is_x, t, TICK_UNIT * axis.minor_props.size * sign,
-                axis.minor_props.color, axis.minor_props.linewidth, axis.minor_props.linestyle);
-        }
-        for &t in &majors {
-            draw_tick(canvas, wt, &v, is_x, t, TICK_UNIT * axis.major_props.size * sign,
-                axis.major_props.color, axis.major_props.linewidth, axis.major_props.linestyle);
+        for (list, props) in [(&minors, &axis.minor_props), (&majors, &axis.major_props)] {
+            let tsize = TICK_UNIT * props.size;
+            let (s1a, s1b, s2a, s2b) = match axis.tick_inout {
+                0 => (vbase1, vbase1 + sign * tsize, vbase2, vbase2 - sign * tsize),
+                1 => (vbase1, vbase1 - sign * tsize, vbase2, vbase2 + sign * tsize),
+                _ => (vbase1 - tsize, vbase1 + tsize, vbase2 + tsize, vbase2 - tsize),
+            };
+            for &t in list.iter() {
+                let a = along_of(t);
+                if on_normal {
+                    canvas.draw_polyline(&[pt(a, s1a), pt(a, s1b)], props.color, props.linewidth, props.linestyle);
+                }
+                if on_opposite {
+                    canvas.draw_polyline(&[pt(a, s2a), pt(a, s2b)], props.color, props.linewidth, props.linestyle);
+                }
+            }
         }
     }
 
-    // Perpendicular offset from the axis to the tick-label anchor. Inward
-    // ticks don't extend outside the frame, so only the gap applies; outward
-    // ticks also clear the tick length (Grace's vbase_tlabel computation).
+    // Tick label baselines per side (drawticks.cpp vbase_tlabel1/2).
     let tsize = TICK_UNIT * axis.major_props.size;
-    let tl_base = if axis.ticks_in { 0.0 } else { tsize } + TL_OFFSET;
+    let (tl1, tl2) = match axis.tick_inout {
+        0 => (
+            vbase1 - (1.0 - sign) / 2.0 * tsize - TL_OFFSET,
+            vbase2 + (1.0 - sign) / 2.0 * tsize + TL_OFFSET,
+        ),
+        1 => (
+            vbase1 - (1.0 + sign) / 2.0 * tsize - TL_OFFSET,
+            vbase2 + (1.0 + sign) / 2.0 * tsize + TL_OFFSET,
+        ),
+        _ => (vbase1 - tsize - TL_OFFSET, vbase2 + tsize + TL_OFFSET),
+    };
 
     // Majors that get a label: in the spec start/stop range, then every
     // (tl_skip+1)-th of those (drawticks.cpp: `itcur % (tl_skip + 1) == 0`,
@@ -140,31 +188,81 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
         .map(|(_, t)| t)
         .collect();
 
+    let tl_on_normal = axis.tl_op != 1;
+    let tl_on_opposite = axis.tl_op != 0;
     if axis.ticklabels {
         for &t in &labeled {
-            draw_tick_label(canvas, wt, &v, is_x, t, tl_base, axis);
+            let a = along_of(t);
+            let text = tick_label_text(axis, t);
+            // Normal side: x labels hang below (CENTER|TOP), y labels sit
+            // left (RIGHT|MIDDLE); the opposite side mirrors both.
+            if tl_on_normal {
+                let (ha, va) = if is_x {
+                    (HAlign::Center, VAlign::Top)
+                } else {
+                    (HAlign::Right, VAlign::Middle)
+                };
+                canvas.draw_text(pt(a, tl1), &text, axis.tl_charsize, axis.tl_font, axis.tl_color, ha, va, axis.tl_angle as f64);
+            }
+            if tl_on_opposite {
+                let (ha, va) = if is_x {
+                    (HAlign::Center, VAlign::Bottom)
+                } else {
+                    (HAlign::Left, VAlign::Middle)
+                };
+                canvas.draw_text(pt(a, tl2), &text, axis.tl_charsize, axis.tl_font, axis.tl_color, ha, va, axis.tl_angle as f64);
+            }
         }
     }
 
+    // Axis label: tl_offset beyond the side's bounding box of tick marks and
+    // tick labels (vp_label_offset = (vbase - bb_edge) + tl_offset).
     if !axis.label.is_empty() {
-        // Grace places the axis label `tl_offset` beyond the tick-label bounding
-        // box (graphs.cpp/drawticks.cpp: vp_label_offset = (vbase - bb_edge) +
-        // tl_offset). The x label is TOP-justified (its top edge at the anchor);
-        // the y label is MIDDLE-justified (centered on the anchor) — see
-        // tlabel1_just. The visible gap then comes from that centering plus the
-        // glyph side bearings.
-        // Grace's bb (BBOX_TYPE_TEMP) covers both the tick-mark lines and
-        // the drawn tick labels; the label sits tl_offset beyond whichever
-        // extends further. Without tick labels this reduces to the outward
-        // tick length (or zero for inward ticks) plus the gap.
-        let ticks_extent = if axis.ticks && !axis.ticks_in { tsize } else { 0.0 };
-        let labels_extent = if axis.ticklabels && !labeled.is_empty() {
-            tl_base + tick_label_extent(canvas, is_x, &labeled, axis)
+        // Outward tick extents beyond each base (mirror of the tick switch).
+        let tick_ext = match axis.tick_inout {
+            0 => (1.0 - sign) / 2.0 * tsize,
+            1 => (1.0 + sign) / 2.0 * tsize,
+            _ => tsize,
+        };
+        let tick_ext = if axis.ticks { tick_ext } else { 0.0 };
+        let ink = if axis.ticklabels && !labeled.is_empty() {
+            tick_label_extent(canvas, is_x, &labeled, axis)
         } else {
             0.0
         };
-        let offset = ticks_extent.max(labels_extent) + TL_OFFSET;
-        draw_axis_label(canvas, &v, is_x, axis, offset);
+        let mid = (amin + amax) / 2.0;
+        if axis.label_op != 1 {
+            let lab_ext = if ink > 0.0 && tl_on_normal {
+                (vbase1 - tl1) + ink
+            } else {
+                0.0
+            };
+            let offset = tick_ext.max(lab_ext) + TL_OFFSET;
+            let anchor = pt(mid, vbase1 - offset);
+            let (ha, va) = if is_x {
+                (HAlign::Center, VAlign::Top)
+            } else {
+                (HAlign::Right, VAlign::Middle)
+            };
+            let angle = if is_x { 0.0 } else { 90.0 };
+            canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color, ha, va, angle);
+        }
+        if axis.label_op != 0 {
+            let lab_ext = if ink > 0.0 && tl_on_opposite {
+                (tl2 - vbase2) + ink
+            } else {
+                0.0
+            };
+            let offset = tick_ext.max(lab_ext) + TL_OFFSET;
+            let anchor = pt(mid, vbase2 + offset);
+            let (ha, va) = if is_x {
+                (HAlign::Center, VAlign::Bottom)
+            } else {
+                (HAlign::Left, VAlign::Middle)
+            };
+            let angle = if is_x { 0.0 } else { 90.0 };
+            canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color, ha, va, angle);
+        }
     }
 }
 
@@ -220,41 +318,7 @@ fn tick_label_extent(canvas: &Canvas, is_x: bool, majors: &[f64], axis: &Axis) -
         .fold(0.0, f64::max)
 }
 
-/// Map a tick value to its view position on the axis (returns view x and y).
-fn tick_view_pos(wt: &WorldTransform, v: &crate::model::View, is_x: bool, t: f64) -> Option<VPoint> {
-    if is_x {
-        Some(VPoint { x: wt.x_to_view(t), y: v.ymin })
-    } else {
-        Some(VPoint { x: v.xmin, y: wt.y_to_view(t) })
-    }
-}
 
-#[allow(clippy::too_many_arguments)]
-fn draw_tick(
-    canvas: &mut Canvas,
-    wt: &WorldTransform,
-    v: &crate::model::View,
-    is_x: bool,
-    t: f64,
-    len: f64,
-    color: i32,
-    lw: f64,
-    ls: i32,
-) {
-    let Some(base) = tick_view_pos(wt, v, is_x, t) else { return };
-    if is_x {
-        // Bottom edge tick (inward = up) and top edge tick (inward = down).
-        let bottom = [base, VPoint { x: base.x, y: base.y + len }];
-        let top = [VPoint { x: base.x, y: v.ymax }, VPoint { x: base.x, y: v.ymax - len }];
-        canvas.draw_polyline(&bottom, color, lw, ls);
-        canvas.draw_polyline(&top, color, lw, ls);
-    } else {
-        let left = [base, VPoint { x: base.x + len, y: base.y }];
-        let right = [VPoint { x: v.xmax, y: base.y }, VPoint { x: v.xmax - len, y: base.y }];
-        canvas.draw_polyline(&left, color, lw, ls);
-        canvas.draw_polyline(&right, color, lw, ls);
-    }
-}
 
 #[allow(clippy::too_many_arguments)]
 fn draw_grid_line(
@@ -276,46 +340,7 @@ fn draw_grid_line(
     }
 }
 
-fn draw_tick_label(
-    canvas: &mut Canvas,
-    wt: &WorldTransform,
-    v: &crate::model::View,
-    is_x: bool,
-    t: f64,
-    tl_base: f64,
-    axis: &Axis,
-) {
-    let label = tick_label_text(axis, t);
-    if is_x {
-        let vx = wt.x_to_view(t);
-        let anchor = VPoint { x: vx, y: v.ymin - tl_base };
-        canvas.draw_text(anchor, &label, axis.tl_charsize, axis.tl_font, axis.tl_color,
-            HAlign::Center, VAlign::Top, axis.tl_angle as f64);
-    } else {
-        let vy = wt.y_to_view(t);
-        let anchor = VPoint { x: v.xmin - tl_base, y: vy };
-        canvas.draw_text(anchor, &label, axis.tl_charsize, axis.tl_font, axis.tl_color,
-            HAlign::Right, VAlign::Middle, axis.tl_angle as f64);
-    }
-}
 
-/// Draw the axis label at perpendicular distance `offset` from the axis,
-/// centered along it. Mirrors Grace's `drawticks.cpp`: the x label is drawn
-/// `JUST_CENTER|JUST_TOP` at angle 0, the y label `JUST_RIGHT|JUST_MIDDLE` at
-/// angle 90 (for the default parallel layout). `draw_text` positions each label
-/// by its rendered bounding box, so the placement follows the real glyph
-/// extents — no per-string constants.
-fn draw_axis_label(canvas: &mut Canvas, v: &crate::model::View, is_x: bool, axis: &Axis, offset: f64) {
-    if is_x {
-        let anchor = VPoint { x: (v.xmin + v.xmax) / 2.0, y: v.ymin - offset };
-        canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color,
-            HAlign::Center, VAlign::Top, 0.0);
-    } else {
-        let anchor = VPoint { x: v.xmin - offset, y: (v.ymin + v.ymax) / 2.0 };
-        canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color,
-            HAlign::Right, VAlign::Middle, 90.0);
-    }
-}
 
 /// Generate major tick world positions at multiples of `step`.
 pub fn major_ticks(wmin: f64, wmax: f64, step: f64) -> Vec<f64> {

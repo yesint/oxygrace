@@ -72,11 +72,16 @@ pub enum AxisProp {
     LabelColor(i32),
     LabelCharSize(f64),
     TicksActive(bool),
-    TicksDir(bool), // true = in
+    /// Tick direction: 0 in, 1 out, 2 both (`tick in|out|both`).
+    TicksInOut(i32),
     MinorTicks(i32),
     AutoNum(i32),
     TickRound(bool),
     TickOp(i32),
+    TlOp(i32),
+    LabelOp(i32),
+    Zero(bool),
+    Offset(f64, f64),
     Major(TickLevelProp),
     Minor(TickLevelProp),
     TlActive(bool),
@@ -494,6 +499,10 @@ peg::parser! {
         rule axis_sel() -> AxisId
             = kw("altxaxis") { AxisId::AltX }
             / kw("altyaxis") { AxisId::AltY }
+            // Old xmgr names: the zero axes are the same slots as alt axes
+            // (pars.yacc maps ZEROXAXIS to the ALTXAXIS token).
+            / kw("zeroxaxis") { AxisId::AltX }
+            / kw("zeroyaxis") { AxisId::AltY }
             / kw("xaxis") { AxisId::X }
             / kw("yaxis") { AxisId::Y }
 
@@ -503,6 +512,8 @@ peg::parser! {
             / kw("label") __ p:axis_label() { p }
             / kw("tick") __ p:axis_tick() { p }
             / kw("ticklabel") __ p:axis_ticklabel() { p }
+            / kw("type") __ kw("zero") __ b:onoff() { AxisProp::Zero(b) }
+            / kw("offset") __ a:num() comma() b:num() { AxisProp::Offset(a, b) }
             / [_]* { AxisProp::Ignored }
 
         rule axis_bar() -> AxisProp
@@ -516,14 +527,15 @@ peg::parser! {
             = kw("char") __ kw("size") __ n:num() { AxisProp::LabelCharSize(n) }
             / kw("font") __ n:iflex() { AxisProp::LabelFont(n) }
             / kw("color") __ n:iflex() { AxisProp::LabelColor(n) }
+            / kw("op") __ v:op_side() { AxisProp::LabelOp(v) }
             / s:qstring() { AxisProp::LabelText(s) }
             / [_]* { AxisProp::Ignored }
 
         rule axis_tick() -> AxisProp
             = b:onoff() { AxisProp::TicksActive(b) }
-            / kw("in") { AxisProp::TicksDir(true) }
-            / kw("out") { AxisProp::TicksDir(false) }
-            / kw("both") { AxisProp::Ignored }
+            / kw("in") { AxisProp::TicksInOut(0) }
+            / kw("out") { AxisProp::TicksInOut(1) }
+            / kw("both") { AxisProp::TicksInOut(2) }
             / kw("spec") __ kw("type") __ t:(
                   kw("none") { 0 } / kw("ticks") { 1 } / kw("both") { 2 }
               ) { AxisProp::SpecType(t) }
@@ -553,11 +565,18 @@ peg::parser! {
             / kw("grid") __ b:onoff() { TickLevelProp::Grid(b) }
             / n:num() {? if allow_spacing { Ok(TickLevelProp::Spacing(n)) } else { Err("minor spacing") } }
 
+        /// Placement side: 0 normal (bottom/left), 1 opposite (top/right), 2 both.
+        rule op_side() -> i32
+            = kw("both") { 2 }
+            / kw("bottom") { 0 } / kw("left") { 0 } / kw("normal") { 0 }
+            / kw("top") { 1 } / kw("right") { 1 } / kw("opposite") { 1 }
+
         rule axis_ticklabel() -> AxisProp
             // The spec form must precede onoff(): a bare "0" would otherwise
             // commit the PEG choice on "ticklabel 0, \"label\"" lines.
             = i:uint() comma() s:qstring() { AxisProp::SpecLabel { idx: i, label: s } }
             / b:onoff() { AxisProp::TlActive(b) }
+            / kw("op") __ v:op_side() { AxisProp::TlOp(v) }
             / kw("type") __ kw("spec") { AxisProp::SpecType(2) }
             / kw("type") __ kw("auto") { AxisProp::SpecLabelsAutoOld }
             / kw("prec") __ n:iflex() { AxisProp::TlPrec(n) }
