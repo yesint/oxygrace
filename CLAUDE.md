@@ -116,6 +116,34 @@ to this list as you port more; always keep the source reference.
 - **Default 16-color map** verbatim from `draw.cpp` `cmap_init`. `src/color.rs`.
 - **Nine line-style dash patterns** and **32 fill patterns** copied from
   `patterns.h`. `src/render/canvas.rs`, `src/patterns.rs`.
+- **Clipping**: fills/lines/bars/errbars clip to the graph viewport ±
+  `VP_EPSILON 1e-4` (`draw.cpp` `clip_line`/`clip_polygon`); symbols/avalues
+  are unclipped but skip points outside the world window (`is_validWPoint`).
+  Out-of-domain scale values (log of <=0) map to **view 0**, never skipped
+  (`xy_xconv_general`/`xy_yconv_general`).
+- **Log ticks** (`drawticks.cpp` `calculate_tickgrid`): world bounds and
+  `tick major` transform by log10 (major 10 = decades, 2 = octaves); minors
+  at 2..nminor+1 multiples; `t_round` floors the start; >`MAX_TICKS` 256
+  re-autoticks (`auto_ticks`/`nicenum`, graphutils.cpp).
+- **Markup escapes** (`t1fonts.cpp` WriteString): \s/\S shift 0.4/0.6 of the
+  *current* size then scale by 1/sqrt2 (cumulative); \n = baseline -1 em +
+  carriage return; \v/\V/\h shifts; \+\- = 2^(1/4); \c..\C = +128
+  charset; under/overline from font metrics.
+- **Font order by version** (pars.yacc): `@version < 50001` = old ACE/gr
+  order (bold-then-italic, Symbol at 8); newer = FontDataBase order
+  (italic-then-bold, Courier 8..11, Symbol 12). `@map font` overrides.
+  `src/font.rs` FONT_MAP_*.
+- **Old-format fixups** (graphs.cpp `postprocess_project`): version <=40102
+  also rescales view-loctype objects; 40200..=50005 ORs JUST_MIDDLE into
+  string justs; <50001 selects the old font map.
+- **Error bars** (`plotone.cpp` drawerrorbar): riser + cap of half-length
+  `0.01*size`; riser clip cuts at `cliplen` with an open arrow `2*size`.
+- **Arrowheads** (`plotone.cpp` draw_arrowhead): L = `0.01*length`,
+  d = L*dL_ff, l = L*lL_ff; types 0 open / 1 filled / 2 bg-filled.
+- **Axis label offset** = max(tick-mark extent, tick-label extent) +
+  `tl_offset` (the TEMP bbox accumulates marks *and* labels).
+- **Fixed graphs**: one shared world->view rate (min of x/y), viewport
+  shrunk to the world aspect, centered (grace 5.1 definewindow).
 
 ## Authoritative grammar source
 
@@ -173,19 +201,27 @@ Gaps found by baseline comparison, prioritized:
 - Fix: old (pre-`@target`) files attach inline data to the current graph's set 0.
 - *Deferred to later: SYM_CHAR glyph symbols, segment2/3 line types, hatch fill patterns.*
 
-**M3 — scales + annotations (fixes log plots and the annotation-heavy files):**
-- Log / reciprocal / logit scale tick generation + labels (powers of 10, minor 2..9).
-- Autotick algorithm (nice round numbers when `tick major` absent / on autoscale).
-- Data clipping to the frame rectangle.
-- Annotation objects: string, line (with arrows), box, ellipse — used by 32/42 examples.
-- Custom / special tick labels (`ticklabel type spec`, string labels like "Char read").
-- Alt axes (offset bars) and zero axes (`type zero`).
+**M3 (done except alt/zero axes):**
+- Log scale tick generation + labels (decades/octaves, minors 2..9), autotick
+  fallback (nicenum), `tick place rounded`, `ticklabel skip`, power /
+  scientific / engineering / computing label formats.
+- Data clipping to the graph viewport (device clip mask); out-of-domain
+  coords map to view 0 like `xy_yconv_general`.
+- Annotation objects: string, line (with arrows), box, ellipse, timestamp.
+- Specified ticks/labels (`tick spec`, `ticklabel IDX, "..."`, old
+  `tick/ticklabel type spec` forms).
+- *Still open:* alt axes (offset bars), zero axes (`axes.agr`),
+  `ticklabel formula` ($t expressions, reciprocal.agr), geographic/date
+  tick formats (au.agr, times.agr).
 
-**M4 — completeness:**
-- Error bars (xydy/xydx/…); hilo / boxplot / xyz / xysize / xycolor set types.
-- Full string-markup polish (Symbol-font Greek, all escapes).
-- Polar / pie / smith graph types.
-- `.xvg` ergonomics; ASCII/CSV import.
+**M4 (partial):**
+- Done: error bars (all xy d* types, riser clip arrows); full markup engine
+  (\v \h \z \c upperset, under/overline, marks, Symbol Greek);
+  version-aware font mapping (+ `@map font`); SYM_CHAR symbols; avalue
+  point labels; stacked-chart refy for all elements; `Fixed` graph
+  viewport; per-point xycolor/xysize.
+- Open: hilo / boxplot / xyr-circle / vmap-arrow renderers; polar / pie /
+  smith graph types; `.xvg` ergonomics; ASCII/CSV import.
 
 See `/home/semen/.claude/plans/we-will-build-an-wobbly-elephant.md` for the
 original plan.
