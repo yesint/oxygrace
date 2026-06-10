@@ -90,13 +90,16 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
     }
 
     if !axis.label.is_empty() {
-        // Place the axis label just beyond the tick-label bounding box.
+        // Place the axis label beyond the tick-label bounding box, leaving a
+        // margin of about one tick-label em (matching Grace's visible gap and
+        // clearing the rotated y-label's descenders).
         let tl_extent = if axis.ticklabels {
             tick_label_extent(canvas, is_x, &majors, axis)
         } else {
             0.0
         };
-        let offset = tl_base + tl_extent + TL_OFFSET;
+        let margin = canvas.em_view(axis.tl_charsize.max(axis.label_charsize));
+        let offset = tl_base + tl_extent + margin;
         draw_axis_label(canvas, &v, is_x, axis, offset);
     }
 }
