@@ -92,7 +92,33 @@ pub fn parse_project(content: &str) -> Project {
 
     postprocess_version(&mut project, cur.version);
     autoscale_unset(&mut project, &cur);
+    fixup_fixed_graphs(&mut project);
     project
+}
+
+/// For `Fixed` graphs both axes share one world->view rate; the effective
+/// viewport shrinks to the world aspect, centered in the stored viewport
+/// (grace 5.1 `definewindow` GRAPH_FIXED — gracebat draws the frame at the
+/// adjusted viewport, which is what we replicate).
+fn fixup_fixed_graphs(project: &mut Project) {
+    for graph in &mut project.graphs {
+        if graph.graph_type != crate::model::GraphType::Fixed {
+            continue;
+        }
+        let w = &graph.world;
+        let v = &mut graph.view;
+        let (wx, wy) = (w.xmax - w.xmin, w.ymax - w.ymin);
+        let (vx, vy) = (v.xmax - v.xmin, v.ymax - v.ymin);
+        if wx <= 0.0 || wy <= 0.0 || vx <= 0.0 || vy <= 0.0 {
+            continue;
+        }
+        let rc = (vx / wx).min(vy / wy);
+        let (cx, cy) = ((v.xmin + v.xmax) / 2.0, (v.ymin + v.ymax) / 2.0);
+        v.xmin = cx - rc * wx / 2.0;
+        v.xmax = cx + rc * wx / 2.0;
+        v.ymin = cy - rc * wy / 2.0;
+        v.ymax = cy + rc * wy / 2.0;
+    }
 }
 
 /// Apply version-dependent fixups for old file formats, mirroring Grace's
