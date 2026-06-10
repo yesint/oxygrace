@@ -49,12 +49,20 @@ pub fn draw_legend(canvas: &mut Canvas, graph: &Graph) {
         .map(|s| canvas.text_width_view(&s.legend, l.charsize, l.font))
         .fold(0.0, f64::max);
 
-    // Box around the legend (filled then outlined), drawn first.
+    // Box around the legend (filled then outlined), drawn first. Grace sizes
+    // the box to enclose the actual content; with a short swatch line the
+    // swatch can sit left of the anchor, so the box must extend to the
+    // swatch's left edge, not just the anchor.
     if l.box_on {
         let pad_x = 0.01 * l.hgap;
         let pad_y = 0.01 * l.vgap;
         let content_h = entries.len() as f64 * em + (entries.len().saturating_sub(1)) as f64 * yskip;
-        let x1 = ax - pad_x;
+        let max_hw = 0.01 * max_symsize;
+        let any_line = entries
+            .iter()
+            .any(|s| ldist > 0.0 && s.line_type != LineType::None && s.linestyle != 0);
+        let swatch_left = if any_line { ax - max_hw } else { ax + ldist / 2.0 - max_hw };
+        let x1 = ax.min(swatch_left) - pad_x;
         let x2 = text_x + max_text + pad_x;
         let y_top = ay + pad_y;
         let y_bot = ay - content_h - pad_y;
