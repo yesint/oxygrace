@@ -34,6 +34,29 @@ cargo clippy                      # lint (keep clean)
   decoded leniently to tolerate legacy Latin-1).
 - Idiomatic, simple, readable, documented code. No overengineering.
 
+## Replicate Grace's formulas — do NOT guess
+
+**The single most important rule for placement/geometry work.** For every
+offset, gap, size, scale factor, or element position, find the exact formula in
+the QtGrace6 / Grace source and replicate *that*, with a code comment citing the
+file. Do not eyeball a constant until the montage "looks right" — a value tuned
+to match one example is almost always wrong for another (this happened
+repeatedly: a guessed axis-label offset matched co2 but was wrong everywhere
+else; a guessed page mapping fixed co2 but broke bar).
+
+Workflow when a visual element is misplaced:
+1. Grep QtGrace6 for the relevant draw code (`drawticks.cpp`, `plotone.cpp`,
+   `draw.cpp`, `graphutils.cpp`, `device.cpp`, `graphs.cpp`).
+2. Read the actual expression (the magic constant, the justification, the
+   per-version branch) and port it verbatim, citing the source in a comment.
+3. Only then verify against the baseline. If a few px remain, confirm with the
+   original `gracebat` before tuning — qtgrace and grace agree, and the
+   reference is authoritative, not your intuition.
+
+When the exact source value can't be reproduced (e.g. Grace measures a real
+rendered bounding box we approximate), match the *intent* of the formula and say
+so in a comment — don't substitute an unrelated guessed constant.
+
 ## Module layout
 
 Use the **`<module>.rs` + `<module>/` directory** convention — **never
@@ -55,17 +78,44 @@ examples/            *.agr test corpus (from QtGrace6)
 tests/integration.rs grammar + transform unit tests + corpus smoke test
 ```
 
-## Reference constants (from QtGrace6)
+## Reference formulas (ported from QtGrace6 — cite the source in code)
 
-- Default page **733×538 px** at 72 DPI (`DEFAULT_PAGE_WIDTH/HEIGHT`).
-- View→device is **isotropic**: `px = vx·side`, `py = page_h − vy·side`, where
-  `side = min(page_w, page_h)` (origin bottom-left in view space, Y flipped for
-  the image). See `src/render/transform.rs`.
-- Line width px = `linew · 0.0015 · side` (`MAGIC_LINEW_SCALE`).
-- Font em px = `charsize · 0.028 · side` (`MAGIC_FONT_SCALE`).
-- Default 16-color map and 13 font slots (Times/Helvetica/Courier + Symbol +
-  Dingbats → URW base35) are in `src/color.rs` and `src/font.rs`.
-- Tick mark length = `0.02 · size` view units.
+These are the placement/geometry formulas we've reverse-engineered so far. Add
+to this list as you port more; always keep the source reference.
+
+- **View→device** is **isotropic**: `px = vx·side`, `py = page_h − vy·side`,
+  `side = min(page_w, page_h)`; origin bottom-left in view space, Y flipped for
+  the image (`rstdrv.cpp` `VPoint2gdPoint`, `page_scale = MIN2(w,h)`).
+  `src/render/transform.rs`.
+- **Default page**: our default is US-Letter landscape **792×612 px @ 72 DPI**.
+  Files with `@page size W H` override it. (`DEFAULT_PAGE_WIDTH/HEIGHT` 733×538
+  is Grace's *screen* default, not the hardcopy default.)
+- **Old-format viewport rescale** (`graphs.cpp` `postprocess_project`): for
+  `@version < 40005` force 792×612; for `version ≤ 40102` multiply every
+  viewport (and view-loctype legend/object coords) by `get_page_viewport()` =
+  `(width/side, height/side)` — pre-4.1.02 files store viewports as
+  normalized-device-coords and must be stretched into the isotropic system.
+  `src/parse/reader.rs` `postprocess_version`.
+- **Line width px** = `linew · 0.0015 · side` (`MAGIC_LINEW_SCALE`, `globals.h`).
+- **Font em px** = `charsize · 0.028 · side` (`MAGIC_FONT_SCALE`, `t1fonts.h`).
+- **Tick mark length** = `0.02 · size` view units (`drawticks.cpp` `tsize`).
+- **Tick label gap** `tl_offset = 0.01` view units (auto). Tick labels sit at
+  `tl_offset` from the axis for inward ticks; `tsize + tl_offset` for outward
+  (`drawticks.cpp` `vbase_tlabel`). x labels CENTER|TOP, y labels RIGHT|MIDDLE.
+- **Axis label** anchor = `(distance to tick-label bbox edge) + tl_offset`
+  (`drawticks.cpp` `vp_label_offset`). x label TOP-justified, y label
+  MIDDLE-justified (rotated, centered). `src/draw/axes.rs`.
+- **Symbol radius / bar half-width** = `0.01 · symsize` view units
+  (`plotone.cpp` `drawxysym`, `drawsetbars`).
+- **Chart bar grouping offset** accumulates `0.5·0.02·symsize` per set plus
+  `bargap` (`plotone.cpp`); stacked charts accumulate y per category.
+- **Font slot order** (no `@map font`) is Grace's t1lib order: 0 Times-Roman,
+  **1 Bold, 2 Italic**, 3 BoldItalic, 4 Helvetica, 5 Helv-Bold, 6 Helv-Oblique,
+  7 Helv-BoldOblique, 8 Courier… 12 Symbol, 13 ZapfDingbats. Verified against
+  QtGrace's render of `tfonts.agr`. `src/font.rs`.
+- **Default 16-color map** verbatim from `draw.cpp` `cmap_init`. `src/color.rs`.
+- **Nine line-style dash patterns** and **32 fill patterns** copied from
+  `patterns.h`. `src/render/canvas.rs`, `src/patterns.rs`.
 
 ## Authoritative grammar source
 
