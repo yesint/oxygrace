@@ -206,6 +206,12 @@ impl<'a> Canvas<'a> {
         charsize * crate::render::transform::MAGIC_FONT_SCALE
     }
 
+    /// Approximate rendered text height (ascent) in view units — the
+    /// perpendicular extent of a tick label, used to place axis labels.
+    pub fn text_height_view(&self, charsize: f64, font: i32) -> f64 {
+        self.fonts.ascent(font) as f64 * self.em_view(charsize)
+    }
+
     /// Fill a circle (center + radius in view units) with a color and pattern.
     pub fn fill_circle(&mut self, center: VPoint, radius_view: f64, color: i32, pattern: i32) {
         let (cx, cy) = self.page.view_to_device(center.x, center.y);

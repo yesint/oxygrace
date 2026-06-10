@@ -10,8 +10,9 @@ use crate::render::{Canvas, HAlign, VAlign, VPoint, WorldTransform};
 
 /// View-units length of a unit-size tick (Grace's `0.02 * size`).
 const TICK_UNIT: f64 = 0.02;
-/// Extra gap (view units) between tick and its label.
-const LABEL_GAP: f64 = 0.012;
+/// Perpendicular gap (view units) between a tick and its label, and between
+/// the tick labels and the axis label (Grace's auto `tl_offset`).
+const TL_OFFSET: f64 = 0.01;
 /// Maximum number of ticks generated for one axis (runaway guard).
 const MAX_TICKS: usize = 1000;
 
@@ -76,15 +77,48 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
         }
     }
 
+    // Perpendicular offset from the axis to the tick-label anchor. Inward
+    // ticks don't extend outside the frame, so only the gap applies; outward
+    // ticks also clear the tick length (Grace's vbase_tlabel computation).
+    let tsize = TICK_UNIT * axis.major_props.size;
+    let tl_base = if axis.ticks_in { 0.0 } else { tsize } + TL_OFFSET;
+
     if axis.ticklabels {
-        let tsize = TICK_UNIT * axis.major_props.size;
         for &t in &majors {
-            draw_tick_label(canvas, wt, &v, is_x, t, tsize, axis);
+            draw_tick_label(canvas, wt, &v, is_x, t, tl_base, axis);
         }
     }
 
     if !axis.label.is_empty() {
-        draw_axis_label(canvas, &v, is_x, axis);
+        // Place the axis label just beyond the tick-label bounding box.
+        let tl_extent = if axis.ticklabels {
+            tick_label_extent(canvas, is_x, &majors, axis)
+        } else {
+            0.0
+        };
+        let offset = tl_base + tl_extent + TL_OFFSET;
+        draw_axis_label(canvas, &v, is_x, axis, offset);
+    }
+}
+
+/// Perpendicular extent of the tick labels (height for x-axes, max width for
+/// y-axes), in view units.
+fn tick_label_extent(canvas: &Canvas, is_x: bool, majors: &[f64], axis: &Axis) -> f64 {
+    if is_x {
+        canvas.text_height_view(axis.tl_charsize, axis.tl_font)
+    } else {
+        majors
+            .iter()
+            .map(|&t| {
+                let s = format!(
+                    "{}{}{}",
+                    axis.tl_prepend,
+                    format_value(t, axis.tl_format, axis.tl_prec),
+                    axis.tl_append
+                );
+                canvas.text_width_view(&s, axis.tl_charsize, axis.tl_font)
+            })
+            .fold(0.0, f64::max)
     }
 }
 
@@ -152,33 +186,33 @@ fn draw_tick_label(
     v: &crate::model::View,
     is_x: bool,
     t: f64,
-    tsize: f64,
+    tl_base: f64,
     axis: &Axis,
 ) {
     let label = format!("{}{}{}", axis.tl_prepend, format_value(t, axis.tl_format, axis.tl_prec), axis.tl_append);
     if is_x {
         let Some(vx) = wt.x_to_view(t) else { return };
-        let anchor = VPoint { x: vx, y: v.ymin - tsize - LABEL_GAP };
+        let anchor = VPoint { x: vx, y: v.ymin - tl_base };
         canvas.draw_text(anchor, &label, axis.tl_charsize, axis.tl_font, axis.tl_color,
             HAlign::Center, VAlign::Top, axis.tl_angle as f64);
     } else {
         let Some(vy) = wt.y_to_view(t) else { return };
-        let anchor = VPoint { x: v.xmin - tsize - LABEL_GAP, y: vy };
+        let anchor = VPoint { x: v.xmin - tl_base, y: vy };
         canvas.draw_text(anchor, &label, axis.tl_charsize, axis.tl_font, axis.tl_color,
             HAlign::Right, VAlign::Middle, axis.tl_angle as f64);
     }
 }
 
-fn draw_axis_label(canvas: &mut Canvas, v: &crate::model::View, is_x: bool, axis: &Axis) {
-    // Place the label outside the tick labels, centered along the axis.
+/// Draw the axis label `offset` view-units beyond the axis, centered along it.
+fn draw_axis_label(canvas: &mut Canvas, v: &crate::model::View, is_x: bool, axis: &Axis, offset: f64) {
     if is_x {
-        let anchor = VPoint { x: (v.xmin + v.xmax) / 2.0, y: v.ymin - 0.08 };
+        let anchor = VPoint { x: (v.xmin + v.xmax) / 2.0, y: v.ymin - offset };
         canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color,
             HAlign::Center, VAlign::Top, 0.0);
     } else {
-        let anchor = VPoint { x: v.xmin - 0.10, y: (v.ymin + v.ymax) / 2.0 };
+        let anchor = VPoint { x: v.xmin - offset, y: (v.ymin + v.ymax) / 2.0 };
         canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color,
-            HAlign::Center, VAlign::Baseline, 90.0);
+            HAlign::Center, VAlign::Top, 90.0);
     }
 }
 
