@@ -103,6 +103,6 @@ std::fs::write("plot.png", png)?;
 
 ## License
 
-GPL-2.0-or-later, matching Grace. The bundled
+MIT. The bundled
 [URW base35 fonts](https://github.com/ArtifexSoftware/urw-base35-fonts) are
-distributed under their own license.
+distributed under their own license (see `assets/fonts`).

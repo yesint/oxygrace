@@ -3,7 +3,7 @@ name = "oxygrace"
 version = "0.1.0"
 edition = "2021"
 description = "A pure-Rust headless interpreter and renderer for Grace (.agr/.xvg) plot files"
-license = "GPL-2.0-or-later"
+license = "MIT"
 
 [lib]
 name = "oxygrace"
