@@ -137,7 +137,6 @@ fn axis_ticks(graph: &Graph, is_x: bool, axis: &Axis) -> (Vec<f64>, Vec<f64>) {
 pub fn draw_grid(canvas: &mut Canvas, graph: &Graph) {
     let wt = WorldTransform::new(graph);
     let polar = graph.graph_type == crate::model::GraphType::Polar;
-    let v = graph.view;
     let w = &graph.world;
     for id in [AxisId::X, AxisId::Y, AxisId::AltX, AxisId::AltY] {
         let axis = &graph.axes[id.index()];
@@ -166,7 +165,7 @@ pub fn draw_grid(canvas: &mut Canvas, graph: &Graph) {
                         canvas.draw_polyline(&pts, props.color, props.linewidth, props.linestyle);
                     }
                 } else {
-                    draw_grid_line(canvas, &wt, &v, is_x, t, props.color, props.linewidth, props.linestyle);
+                    draw_grid_line(canvas, &wt, w, is_x, t, props.color, props.linewidth, props.linestyle);
                 }
             }
         }
@@ -174,7 +173,6 @@ pub fn draw_grid(canvas: &mut Canvas, graph: &Graph) {
 }
 
 fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: AxisId, axis: &Axis) {
-    let v = graph.view;
     let is_x = id.is_x();
     let (majors, minors) = axis_ticks(graph, is_x, axis);
 
@@ -195,11 +193,29 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
         let v0 = if is_x { wt.y_to_view(0.0) } else { wt.x_to_view(0.0) };
         (v0 - axis.offs_normal, v0 + axis.offs_opposite, -1.0)
     } else {
-        let (e1, e2) = if is_x { (v.ymin, v.ymax) } else { (v.xmin, v.xmax) };
+        // The axis positions are the world edges mapped through the graph
+        // transform (drawticks: Wpoint2Vpoint of w.yg1/yg2) — identical to
+        // the viewport edges except for Fixed graphs, whose shared-rate
+        // transform parks the axes inside the viewport.
+        let w = &graph.world;
+        let (e1, e2) = if is_x {
+            (wt.y_to_view(w.ymin), wt.y_to_view(w.ymax))
+        } else {
+            (wt.x_to_view(w.xmin), wt.x_to_view(w.xmax))
+        };
+        let (e1, e2) = (e1.min(e2), e1.max(e2));
         (e1 - axis.offs_normal, e2 + axis.offs_opposite, 1.0)
     };
     // Extent along the axis and a (along, perpendicular) -> view point helper.
-    let (amin, amax) = if is_x { (v.xmin, v.xmax) } else { (v.ymin, v.ymax) };
+    let (amin, amax) = {
+        let w = &graph.world;
+        let (a1, a2) = if is_x {
+            (wt.x_to_view(w.xmin), wt.x_to_view(w.xmax))
+        } else {
+            (wt.y_to_view(w.ymin), wt.y_to_view(w.ymax))
+        };
+        (a1.min(a2), a1.max(a2))
+    };
     let pt = |along: f64, perp: f64| {
         if is_x {
             VPoint { x: along, y: perp }
@@ -281,10 +297,15 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
 
     let tl_on_normal = axis.tl_op != 1;
     let tl_on_opposite = axis.tl_op != 0;
+    // Staggered labels alternate over stagger+1 rows, each a label height +
+    // gap further out (drawticks.cpp: vbase_tlabel -+ (tl_offset + tlsize) *
+    // (itcur % (tl_staggered + 1)) with tlsize = 0.02 * tl_charsize).
+    let stagger_step = TL_OFFSET + TICK_UNIT * axis.tl_charsize;
     if axis.ticklabels {
-        for &t in &labeled {
+        for (itcur, &t) in labeled.iter().enumerate() {
             let a = along_of(t);
             let text = tick_label_text(axis, t);
+            let shift = stagger_step * (itcur as i32 % (axis.tl_stagger + 1)) as f64;
             // Normal side: x labels hang below (CENTER|TOP), y labels sit
             // left (RIGHT|MIDDLE); the opposite side mirrors both.
             if tl_on_normal {
@@ -293,7 +314,7 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
                 } else {
                     (HAlign::Right, VAlign::Middle)
                 };
-                canvas.draw_text(pt(a, tl1), &text, axis.tl_charsize, axis.tl_font, axis.tl_color, ha, va, axis.tl_angle as f64);
+                canvas.draw_text(pt(a, tl1 - shift), &text, axis.tl_charsize, axis.tl_font, axis.tl_color, ha, va, axis.tl_angle as f64);
             }
             if tl_on_opposite {
                 let (ha, va) = if is_x {
@@ -301,7 +322,7 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
                 } else {
                     (HAlign::Left, VAlign::Middle)
                 };
-                canvas.draw_text(pt(a, tl2), &text, axis.tl_charsize, axis.tl_font, axis.tl_color, ha, va, axis.tl_angle as f64);
+                canvas.draw_text(pt(a, tl2 + shift), &text, axis.tl_charsize, axis.tl_font, axis.tl_color, ha, va, axis.tl_angle as f64);
             }
         }
     }
@@ -317,7 +338,9 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
         };
         let tick_ext = if axis.ticks { tick_ext } else { 0.0 };
         let ink = if axis.ticklabels && !labeled.is_empty() {
-            tick_label_extent(canvas, is_x, &labeled, axis)
+            let max_shift = stagger_step
+                * (axis.tl_stagger.min(labeled.len() as i32 - 1).max(0)) as f64;
+            tick_label_extent(canvas, is_x, &labeled, axis) + max_shift
         } else {
             0.0
         };
@@ -428,10 +451,12 @@ fn tick_label_extent(canvas: &Canvas, is_x: bool, majors: &[f64], axis: &Axis) -
 
 
 #[allow(clippy::too_many_arguments)]
+/// One grid line across the world window (drawgrid: the span is the world
+/// extreme points mapped through the transform).
 fn draw_grid_line(
     canvas: &mut Canvas,
     wt: &WorldTransform,
-    v: &crate::model::View,
+    w: &crate::model::World,
     is_x: bool,
     t: f64,
     color: i32,
@@ -439,11 +464,13 @@ fn draw_grid_line(
     ls: i32,
 ) {
     if is_x {
-        let vx = wt.x_to_view(t);
-        canvas.draw_polyline(&[VPoint { x: vx, y: v.ymin }, VPoint { x: vx, y: v.ymax }], color, lw, ls);
+        let (x1, y1) = wt.world_to_view(t, w.ymin);
+        let (x2, y2) = wt.world_to_view(t, w.ymax);
+        canvas.draw_polyline(&[VPoint { x: x1, y: y1 }, VPoint { x: x2, y: y2 }], color, lw, ls);
     } else {
-        let vy = wt.y_to_view(t);
-        canvas.draw_polyline(&[VPoint { x: v.xmin, y: vy }, VPoint { x: v.xmax, y: vy }], color, lw, ls);
+        let (x1, y1) = wt.world_to_view(w.xmin, t);
+        let (x2, y2) = wt.world_to_view(w.xmax, t);
+        canvas.draw_polyline(&[VPoint { x: x1, y: y1 }, VPoint { x: x2, y: y2 }], color, lw, ls);
     }
 }
 

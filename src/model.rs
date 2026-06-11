@@ -158,6 +158,8 @@ pub struct Axis {
     /// still drawn at every position.
     /// Label every (skip+1)-th major tick (`ticklabel skip`).
     pub tl_skip: i32,
+    /// Alternate labels over N+1 rows (`ticklabel stagger`).
+    pub tl_stagger: i32,
     /// Transform applied to major tick values before formatting
     /// (`ticklabel formula "$t-273.15"`); empty = identity.
     pub tl_formula: String,
@@ -215,6 +217,7 @@ impl Default for Axis {
             tl_prepend: String::new(),
             tl_append: String::new(),
             tl_skip: 0,
+            tl_stagger: 0,
             tl_formula: String::new(),
             spec_type: 0,
             spec_count: 0,

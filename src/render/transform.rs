@@ -104,6 +104,11 @@ pub struct WorldTransform {
     /// Polar graphs: world x is the angle phi, world y the radius rho
     /// (draw.cpp `COORDINATES_POLAR`).
     polar: bool,
+    /// Fixed graphs: both axes share one world->view rate, anchored at the
+    /// viewport/world midpoints (definewindow_local GRAPH_FIXED) — the
+    /// viewport itself is untouched; the frame stays at the file viewport
+    /// while data and axes land in a world-aspect sub-area.
+    fixed: bool,
     /// World rho-max and the world window (for the polar point test).
     wymin: f64,
     wymax: f64,
@@ -142,6 +147,7 @@ impl WorldTransform {
             xinvert: graph.xinvert,
             yinvert: graph.yinvert,
             polar: graph.graph_type == crate::model::GraphType::Polar,
+            fixed: graph.graph_type == crate::model::GraphType::Fixed,
             wymin: ymin,
             wymax: ymax,
             wxmin: xmin,
@@ -197,12 +203,26 @@ impl WorldTransform {
             && wy <= self.wymin.max(self.wymax)
     }
 
+    /// Shared world->view rate of a Fixed graph: the smaller of the two
+    /// axis rates (definewindow_local GRAPH_FIXED `xv_rc`).
+    fn fixed_rate(&self) -> f64 {
+        let rx = (self.vx1 - self.vx0) / (self.sx1 - self.sx0);
+        let ry = (self.vy1 - self.vy0) / (self.sy1 - self.sy0);
+        rx.min(ry)
+    }
+
     /// Map a world X value to its view X coordinate (0 if out of domain,
     /// per Grace `xy_xconv_general`).
     pub fn x_to_view(&self, wx: f64) -> f64 {
         let Some(sx) = scale_fwd(self.xscale, wx) else {
             return 0.0;
         };
+        if self.fixed {
+            let med = (self.vx0 + self.vx1) / 2.0;
+            let wmed = (self.sx0 + self.sx1) / 2.0;
+            let rc = if self.xinvert { -self.fixed_rate() } else { self.fixed_rate() };
+            return med + rc * (sx - wmed);
+        }
         let mut fx = (sx - self.sx0) / (self.sx1 - self.sx0);
         if self.xinvert {
             fx = 1.0 - fx;
@@ -216,6 +236,12 @@ impl WorldTransform {
         let Some(sy) = scale_fwd(self.yscale, wy) else {
             return 0.0;
         };
+        if self.fixed {
+            let med = (self.vy0 + self.vy1) / 2.0;
+            let wmed = (self.sy0 + self.sy1) / 2.0;
+            let rc = if self.yinvert { -self.fixed_rate() } else { self.fixed_rate() };
+            return med + rc * (sy - wmed);
+        }
         let mut fy = (sy - self.sy0) / (self.sy1 - self.sy0);
         if self.yinvert {
             fy = 1.0 - fy;
