@@ -18,15 +18,79 @@ const SUPSCRIPT_SHIFT: f32 = 0.6;
 /// `ENLARGE_SCALE` = sqrt(sqrt(2)) (t1fonts.h): factor for `\+` / `\-`.
 const ENLARGE_SCALE: f32 = 1.189_207_1;
 
+/// A 2x2 text matrix (Grace `TextMatrix`, t1fonts.cpp): glyph outlines are
+/// transformed by it and the pen advances by `tm * (advance, 0)`, which is
+/// how rotated/mirrored/slanted text (`\t \T \r \l \q`) works.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Tm {
+    pub xx: f32,
+    pub xy: f32,
+    pub yx: f32,
+    pub yy: f32,
+}
+
+impl Tm {
+    pub const UNIT: Tm = Tm { xx: 1.0, xy: 0.0, yx: 0.0, yy: 1.0 };
+
+    fn det(&self) -> f32 {
+        self.xx * self.yy - self.xy * self.yx
+    }
+
+    /// Grace `tm_size`: the effective character size of the matrix
+    /// (signed; mirrored matrices have negative determinants).
+    pub fn size(&self) -> f32 {
+        self.det() / (self.xx * self.xx + self.yx * self.yx).sqrt()
+    }
+
+    /// Left-multiply by `p` (Grace `tm_product`; no-op if `p` is singular).
+    fn product(&mut self, p: Tm) {
+        if p.det() == 0.0 {
+            return;
+        }
+        *self = Tm {
+            xx: p.xx * self.xx + p.xy * self.yx,
+            xy: p.xx * self.xy + p.xy * self.yy,
+            yx: p.yx * self.xx + p.yy * self.yx,
+            yy: p.yx * self.xy + p.yy * self.yy,
+        };
+    }
+
+    fn scale(&mut self, s: f32) {
+        self.xx *= s;
+        self.xy *= s;
+        self.yx *= s;
+        self.yy *= s;
+    }
+
+    fn rotate(&mut self, angle_deg: f32) {
+        if angle_deg != 0.0 {
+            let (si, co) = (angle_deg.to_radians().sin(), angle_deg.to_radians().cos());
+            self.product(Tm { xx: co, xy: -si, yx: si, yy: co });
+        }
+    }
+
+    fn slant(&mut self, s: f32) {
+        if s != 0.0 {
+            self.product(Tm { xx: 1.0, xy: s, yx: 0.0, yy: 1.0 });
+        }
+    }
+
+    /// Apply to a point (em units, Y up).
+    pub fn apply(&self, x: f32, y: f32) -> (f32, f32) {
+        (self.xx * x + self.xy * y, self.yx * x + self.yy * y)
+    }
+}
+
 /// A run of text sharing one style.
 #[derive(Debug, Clone)]
 pub struct StyledRun {
     pub text: String,
     /// Font slot (0..=13).
     pub font: i32,
-    /// Size multiplier relative to the base size.
-    pub scale: f32,
-    /// Baseline shift in em units of the base size (positive = up).
+    /// Text matrix (size, rotation, mirror, slant combined).
+    pub tm: Tm,
+    /// Baseline shift in em units of the base size (positive = up),
+    /// applied along the matrix's vertical column.
     pub baseline: f32,
     /// Optional per-run color override (color index).
     pub color: Option<i32>,
@@ -38,9 +102,11 @@ pub struct StyledRun {
 #[derive(Debug, Clone)]
 enum Item {
     Run(StyledRun),
-    /// One-shot horizontal pen shift, in em units of the base size (`\h{}`).
-    HShift(f32),
-    /// Remember the current pen x as mark `n` (`\m{n}`).
+    /// One-shot pen shift of this many em along the matrix's horizontal
+    /// column (`\h{}`; WriteString `hvpshift`). Carries the matrix so the
+    /// shift direction follows rotations.
+    HShift(f32, Tm),
+    /// Remember the current pen position as mark `n` (`\m{n}`).
     SetMark(i32),
     /// Return the pen to mark `n` (`\M{n}`).
     GotoMark(i32),
@@ -56,7 +122,7 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
     // the slot map (get_mapped_font), names and \x resolve directly by name
     // (get_font_by_name), exactly as WriteString does.
     let mut font = resolve_face(base_font, map);
-    let mut scale = 1.0f32;
+    let mut tm = Tm::UNIT;
     // Current vertical shift and the "baseline" that \v{} / \N return to
     // (WriteString's `vshift` and `baseline`, in base-em units).
     let mut vshift = 0.0f32;
@@ -67,24 +133,19 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
     let mut overline = false;
     let mut buf = String::new();
 
-    macro_rules! flush {
-        ($font:expr, $scale:expr, $vshift:expr) => {
+    macro_rules! flushcur {
+        () => {
             if !buf.is_empty() {
                 items.push(Item::Run(StyledRun {
                     text: std::mem::take(&mut buf),
-                    font: $font,
-                    scale: $scale,
-                    baseline: $vshift,
+                    font,
+                    tm,
+                    baseline: vshift,
                     color,
                     underline,
                     overline,
                 }));
             }
-        };
-    }
-    macro_rules! flushcur {
-        () => {
-            flush!(font, scale, vshift)
         };
     }
 
@@ -156,20 +217,27 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
                             .ok()
                             .or_else(|| crate::color::index_by_name(a));
                     }
-                    // \z{x} multiplies the size; \z{} resets it (t1fonts.cpp).
+                    // \z{x} multiplies the size; \z{} resets it to 1
+                    // keeping the orientation (t1fonts.cpp).
                     'z' => {
                         flushcur!();
                         if a.is_empty() {
-                            scale = 1.0;
+                            let sz = tm.size();
+                            if sz != 0.0 {
+                                tm.scale(1.0 / sz);
+                            }
                         } else if let Ok(v) = a.parse::<f32>() {
-                            scale *= v;
+                            tm.scale(v);
                         }
                     }
                     // \Z{x} sets the absolute size factor.
                     'Z' => {
                         flushcur!();
                         if let Ok(v) = a.parse::<f32>() {
-                            scale = v;
+                            let sz = tm.size();
+                            if sz != 0.0 {
+                                tm.scale(v / sz);
+                            }
                         }
                     }
                     // \v{x}: shift up by x of the current size; \v{} returns
@@ -179,7 +247,7 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
                         if a.is_empty() {
                             vshift = baseline;
                         } else if let Ok(v) = a.parse::<f32>() {
-                            vshift += scale * v;
+                            vshift += tm.size() * v;
                         }
                     }
                     'V' => {
@@ -187,14 +255,43 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
                         if a.is_empty() {
                             baseline = 0.0;
                         } else if let Ok(v) = a.parse::<f32>() {
-                            baseline += scale * v;
+                            baseline += tm.size() * v;
                         }
                         vshift = baseline;
                     }
                     'h' => {
                         flushcur!();
                         if let Ok(v) = a.parse::<f32>() {
-                            items.push(Item::HShift(scale * v));
+                            items.push(Item::HShift(v, tm));
+                        }
+                    }
+                    // Text-matrix escapes: \r rotate, \l slant, \t multiply
+                    // (or reset with no argument), \T set absolute.
+                    'r' => {
+                        flushcur!();
+                        if let Ok(v) = a.parse::<f32>() {
+                            tm.rotate(v);
+                        }
+                    }
+                    'l' => {
+                        flushcur!();
+                        if let Ok(v) = a.parse::<f32>() {
+                            tm.slant(v);
+                        }
+                    }
+                    't' | 'T' => {
+                        flushcur!();
+                        let nums: Vec<f32> =
+                            a.split_whitespace().filter_map(|w| w.parse().ok()).collect();
+                        if kind == 't' && a.is_empty() {
+                            tm = Tm::UNIT;
+                        } else if let [xx, xy, yx, yy] = nums[..] {
+                            let p = Tm { xx, xy, yx, yy };
+                            if kind == 'T' {
+                                tm = p;
+                            } else {
+                                tm.product(p);
+                            }
                         }
                     }
                     'm' => {
@@ -224,8 +321,6 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
                             buf.push(crate::font::map_font_char(resolve_face(font, map), b));
                         }
                     }
-                    // Transform escapes (\r rotate, \l slant, \t, \T) are not
-                    // supported; their argument is consumed and ignored.
                     _ => {
                         let _ = had_braces;
                     }
@@ -240,31 +335,45 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
             // (both cumulative, per WriteString).
             's' => {
                 flushcur!();
-                vshift -= scale * SUBSCRIPT_SHIFT;
-                scale *= SSCRIPT_SCALE;
+                vshift -= tm.size() * SUBSCRIPT_SHIFT;
+                tm.scale(SSCRIPT_SCALE);
                 chars.next();
             }
             'S' => {
                 flushcur!();
-                vshift += scale * SUPSCRIPT_SHIFT;
-                scale *= SSCRIPT_SCALE;
+                vshift += tm.size() * SUPSCRIPT_SHIFT;
+                tm.scale(SSCRIPT_SCALE);
                 chars.next();
             }
-            // Return to normal size on the current baseline.
+            // Return to size 1 (keeping orientation) on the current baseline.
             'N' => {
                 flushcur!();
-                scale = 1.0;
+                let sz = tm.size();
+                if sz != 0.0 {
+                    tm.scale(1.0 / sz);
+                }
                 vshift = baseline;
                 chars.next();
             }
             '+' => {
                 flushcur!();
-                scale *= ENLARGE_SCALE;
+                tm.scale(ENLARGE_SCALE);
                 chars.next();
             }
             '-' => {
                 flushcur!();
-                scale /= ENLARGE_SCALE;
+                tm.scale(1.0 / ENLARGE_SCALE);
+                chars.next();
+            }
+            // Oblique on/off: slant by +-OBLIQUE_FACTOR (t1fonts.h 0.25).
+            'q' => {
+                flushcur!();
+                tm.slant(0.25);
+                chars.next();
+            }
+            'Q' => {
+                flushcur!();
+                tm.slant(-0.25);
                 chars.next();
             }
             // Upper-half charset on/off (\c .. \C).
@@ -319,7 +428,7 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
             }
         }
     }
-    flush!(font, scale, vshift);
+    flushcur!();
     items
 }
 
@@ -345,14 +454,15 @@ fn resolve_face(slot: i32, map: &FontMap) -> i32 {
 }
 
 
-/// A glyph positioned along the text baseline, in em units of the base size.
+/// A glyph positioned in the text frame, in em units of the base size.
 pub struct LaidGlyph {
     pub font: i32,
-    /// Horizontal pen position of the glyph origin (em units).
+    /// Pen position of the glyph origin (em units; rotated/mirrored runs
+    /// advance the pen in both coordinates).
     pub x: f32,
-    /// Baseline offset (em units, positive up).
     pub y: f32,
-    pub scale: f32,
+    /// Text matrix applied to the outline.
+    pub tm: Tm,
     pub ch: char,
     pub color: Option<i32>,
 }
@@ -381,58 +491,82 @@ pub fn layout(fonts: &FontSet, input: &str, base_font: i32, map: &FontMap) -> La
     let items = parse_items(input, base_font, map);
     let mut glyphs = Vec::new();
     let mut rules: Vec<Rule> = Vec::new();
-    let mut pen = 0.0f32;
+    // The pen moves in 2D: rotated/mirrored matrices advance it along the
+    // transformed baseline direction (WriteString: rpoint += glyph advance).
+    let (mut px, mut py) = (0.0f32, 0.0f32);
     let mut width = 0.0f32;
-    let mut marks: std::collections::HashMap<i32, f32> = std::collections::HashMap::new();
+    let mut marks: std::collections::HashMap<i32, (f32, f32)> = std::collections::HashMap::new();
     for item in &items {
         match item {
-            Item::HShift(dx) => pen += dx,
+            // hvpshift: hshift = size*val applied along (cxx, cyx)/size —
+            // net val along the matrix's first column (WriteString).
+            Item::HShift(h, tm) => {
+                px += tm.xx * h;
+                py += tm.yx * h;
+            }
             Item::SetMark(n) => {
-                marks.insert(*n, pen);
+                marks.insert(*n, (px, py));
             }
             Item::GotoMark(n) => {
-                if let Some(&x) = marks.get(n) {
-                    pen = x;
+                if let Some(&(mx, my)) = marks.get(n) {
+                    (px, py) = (mx, my);
                 }
             }
             Item::Newline => {
-                width = width.max(pen);
-                pen = 0.0;
+                width = width.max(px);
+                (px, py) = (0.0, 0.0);
             }
             Item::Run(run) => {
-                let start = pen;
+                // vvpshift: the baseline shift acts along the matrix's
+                // vertical column (WriteString: (cxy, cyy)*vshift/size).
+                let sz = run.tm.size();
+                let (vsx, vsy) = if sz != 0.0 {
+                    (
+                        run.tm.xy * run.baseline / sz,
+                        run.tm.yy * run.baseline / sz,
+                    )
+                } else {
+                    (0.0, run.baseline)
+                };
+                let (startx, starty) = (px, py);
                 for ch in run.text.chars() {
                     let g = fonts.outline_char(run.font, ch);
                     glyphs.push(LaidGlyph {
                         font: run.font,
-                        x: pen,
-                        y: run.baseline,
-                        scale: run.scale,
+                        x: px + vsx,
+                        y: py + vsy,
+                        tm: run.tm,
                         ch,
                         color: run.color,
                     });
-                    pen += g.advance * run.scale;
+                    // Pen advance through the matrix.
+                    let (ax, ay) = run.tm.apply(g.advance, 0.0);
+                    px += ax;
+                    py += ay;
                 }
-                if (run.underline || run.overline) && pen > start {
+                if (run.underline || run.overline) && px > startx {
                     // Rule geometry from the font's metrics, scaled with the
-                    // run (Grace's t1lib draws these from the same metrics).
+                    // run size (Grace's t1lib draws these from the metrics);
+                    // drawn along the plain baseline (the demo's underlined
+                    // strings use the unit matrix).
+                    let scale = run.tm.size().abs();
                     let (upos, uthick) = fonts.underline_metrics(run.font);
                     if run.underline {
                         rules.push(Rule {
-                            x0: start,
-                            x1: pen,
-                            y: run.baseline + upos * run.scale,
-                            thickness: uthick * run.scale,
+                            x0: startx + vsx,
+                            x1: px + vsx,
+                            y: starty + vsy + upos * scale,
+                            thickness: uthick * scale,
                             color: run.color,
                         });
                     }
                     if run.overline {
                         let asc = fonts.ascent(run.font);
                         rules.push(Rule {
-                            x0: start,
-                            x1: pen,
-                            y: run.baseline + (asc + uthick) * run.scale,
-                            thickness: uthick * run.scale,
+                            x0: startx + vsx,
+                            x1: px + vsx,
+                            y: starty + vsy + (asc + uthick) * scale,
+                            thickness: uthick * scale,
                             color: run.color,
                         });
                     }
@@ -443,7 +577,7 @@ pub fn layout(fonts: &FontSet, input: &str, base_font: i32, map: &FontMap) -> La
     Layout {
         glyphs,
         rules,
-        width: width.max(pen),
+        width: width.max(px),
     }
 }
 
@@ -464,11 +598,14 @@ pub fn bbox(fonts: &FontSet, input: &str, base_font: i32, map: &FontMap) -> Opti
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for g in &layout.glyphs {
         if let Some((gx0, gy0, gx1, gy1)) = fonts.glyph_bbox(g.font, g.ch) {
-            // Glyph origin sits at pen x = g.x, baseline shifted by g.y, scaled.
-            x0 = x0.min(g.x + gx0 * g.scale);
-            x1 = x1.max(g.x + gx1 * g.scale);
-            y0 = y0.min(g.y + gy0 * g.scale);
-            y1 = y1.max(g.y + gy1 * g.scale);
+            // Transform all four corners through the run's text matrix.
+            for &(cx, cy) in &[(gx0, gy0), (gx1, gy0), (gx1, gy1), (gx0, gy1)] {
+                let (tx, ty) = g.tm.apply(cx, cy);
+                x0 = x0.min(g.x + tx);
+                x1 = x1.max(g.x + tx);
+                y0 = y0.min(g.y + ty);
+                y1 = y1.max(g.y + ty);
+            }
             found = true;
         }
     }

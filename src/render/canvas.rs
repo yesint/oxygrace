@@ -375,7 +375,8 @@ impl<'a> Canvas<'a> {
         for g in &layout.glyphs {
             if let Some((gx0, gy0, gx1, gy1)) = self.fonts.glyph_bbox(g.font, g.ch) {
                 for &(cx, cy) in &[(gx0, gy0), (gx1, gy0), (gx1, gy1), (gx0, gy1)] {
-                    let (rx, ry) = rot(g.x + cx * g.scale, g.y + cy * g.scale);
+                    let (mx, my) = g.tm.apply(cx, cy);
+                    let (rx, ry) = rot(g.x + mx, g.y + my);
                     bx0 = bx0.min(rx);
                     by0 = by0.min(ry);
                     bx1 = bx1.max(rx);
@@ -413,16 +414,18 @@ impl<'a> Canvas<'a> {
         for g in &layout.glyphs {
             let outline = self.fonts.outline_char(g.font, g.ch);
             let Some(path) = outline.path else { continue };
-            let s = g.scale;
-            // Map glyph outline (em, Y up): scale, place at pen, rotate, then
-            // translate so the fudge point sits at the device anchor (Y down).
+            // Map glyph outline (em, Y up): apply the run's text matrix,
+            // place at the pen, rotate the whole string, then translate so
+            // the fudge point sits at the device anchor (Y down). Composite
+            // affine of R(angle) * tm with the device Y flip:
+            let m = &g.tm;
             let tx = ax + em_px * ((g.x * cos - g.y * sin) - fx);
             let ty = ay - em_px * ((g.x * sin + g.y * cos) - fy);
             let ts = Transform::from_row(
-                em_px * s * cos,
-                -em_px * s * sin,
-                -em_px * s * sin,
-                -em_px * s * cos,
+                em_px * (cos * m.xx - sin * m.yx),
+                -em_px * (sin * m.xx + cos * m.yx),
+                em_px * (cos * m.xy - sin * m.yy),
+                -em_px * (sin * m.xy + cos * m.yy),
                 tx,
                 ty,
             );
