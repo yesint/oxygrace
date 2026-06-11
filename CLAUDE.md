@@ -215,14 +215,19 @@ Gaps found by baseline comparison, prioritized:
   geographic (degreeslon/lat) and date/time formats (src/dates.rs,
   Julian-date conversions).
 
-**M4 (partial):**
-- Done: error bars (all xy d* types, riser clip arrows); full markup engine
+**M4 (done):**
+- Error bars (all xy d* types, riser clip arrows); full markup engine
   (\v \h \z \c upperset, under/overline, marks, Symbol Greek);
   version-aware font mapping (+ `@map font`); SYM_CHAR symbols; avalue
   point labels; stacked-chart refy for all elements; `Fixed` graph
   viewport; per-point xycolor/xysize.
-- Open: hilo / boxplot / xyr-circle / vmap-arrow renderers; polar / pie /
-  smith graph types; `.xvg` ergonomics; ASCII/CSV import.
+- hilo / boxplot / xyr-circle / vmap-arrow set renderers; pie and polar
+  graph types (polar world->view in `transform.rs`, arc bars/grids in
+  `axes.rs`); segment2/3 line types; `symbol skip`; opaque pattern
+  fills (fg-on-bg, like the gd driver).
+- Not implemented: smith charts (grace's own `draw_smith_chart` is an
+  empty stub — there is no reference behavior); CSV import. `.xvg`
+  files load through the tolerant reader.
 
 See `/home/semen/.claude/plans/we-will-build-an-wobbly-elephant.md` for the
 original plan.
