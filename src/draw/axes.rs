@@ -335,7 +335,7 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
             } else {
                 (HAlign::Right, VAlign::Middle)
             };
-            let angle = if is_x { 0.0 } else { 90.0 };
+            let angle = label_angle(is_x, axis);
             canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color, ha, va, angle);
         }
         if axis.label_op != 0 {
@@ -351,9 +351,18 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
             } else {
                 (HAlign::Left, VAlign::Middle)
             };
-            let angle = if is_x { 0.0 } else { 90.0 };
+            let angle = label_angle(is_x, axis);
             canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color, ha, va, angle);
         }
+    }
+}
+
+/// Axis label angle: parallel layout runs along the axis (x: 0, y: 90),
+/// perpendicular swaps it (drawticks.cpp label_layout -> langle).
+fn label_angle(is_x: bool, axis: &Axis) -> f64 {
+    match (is_x, axis.label_perp) {
+        (true, false) | (false, true) => 0.0,
+        _ => 90.0,
     }
 }
 

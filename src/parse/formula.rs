@@ -94,8 +94,14 @@ impl Parser<'_> {
         }
     }
 
-    // atom := '(' expr ')' | '$t' | number
+    // atom := '(' expr ')' | '$t' | 'PI' | number
     fn atom(&mut self) -> Option<f64> {
+        // Named constants (Grace's parser exposes PI).
+        self.skip_ws();
+        if self.s[self.pos..].starts_with(b"PI") || self.s[self.pos..].starts_with(b"pi") {
+            self.pos += 2;
+            return Some(std::f64::consts::PI);
+        }
         match self.peek()? {
             b'(' => {
                 self.pos += 1;
@@ -162,6 +168,7 @@ mod tests {
         assert_eq!(eval("($t+1)/2", 3.0), Some(2.0));
         assert_eq!(eval("-$t^2", 3.0), Some(-9.0));
         assert_eq!(eval("1e-3*$t", 2000.0), Some(2.0));
+        assert_eq!(eval("$t/PI", std::f64::consts::PI), Some(1.0));
         assert_eq!(eval("nonsense", 1.0), None);
     }
 }

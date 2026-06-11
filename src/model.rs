@@ -106,6 +106,9 @@ pub struct Axis {
     pub label_font: i32,
     pub label_charsize: f64,
     pub label_color: i32,
+    /// Axis label layout (`label layout para|perp`): perpendicular swaps the
+    /// label angle (x axis: 0 -> 90 degrees, y axis: 90 -> 0).
+    pub label_perp: bool,
     /// Draw the axis bar (the line along the frame edge).
     pub draw_bar: bool,
     pub bar_color: i32,
@@ -180,6 +183,7 @@ impl Default for Axis {
             label_font: 4,
             label_charsize: 1.0,
             label_color: 1,
+            label_perp: false,
             draw_bar: true,
             bar_color: 1,
             bar_linestyle: 1,

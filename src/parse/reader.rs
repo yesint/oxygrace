@@ -548,6 +548,7 @@ fn apply_axis(axis: &mut crate::model::Axis, prop: AxisProp) {
         AxisProp::TickOp(n) => axis.op = n,
         AxisProp::TlOp(n) => axis.tl_op = n,
         AxisProp::LabelOp(n) => axis.label_op = n,
+        AxisProp::LabelPerp(b) => axis.label_perp = b,
         AxisProp::Zero(b) => axis.zero = b,
         AxisProp::Offset(a, b) => (axis.offs_normal, axis.offs_opposite) = (a, b),
         AxisProp::Major(p) => apply_tick_level(&mut axis.major_props, &mut axis.major, p),

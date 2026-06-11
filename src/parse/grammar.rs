@@ -80,6 +80,7 @@ pub enum AxisProp {
     TickOp(i32),
     TlOp(i32),
     LabelOp(i32),
+    LabelPerp(bool),
     Zero(bool),
     Offset(f64, f64),
     Major(TickLevelProp),
@@ -530,6 +531,14 @@ peg::parser! {
             / kw("font") __ n:iflex() { AxisProp::LabelFont(n) }
             / kw("color") __ n:iflex() { AxisProp::LabelColor(n) }
             / kw("op") __ v:op_side() { AxisProp::LabelOp(v) }
+            / kw("layout") __ v:(kw("perp") { true } / kw("para") { false }) {
+                AxisProp::LabelPerp(v)
+            }
+            // "label place top|bottom|both|..." is the placement side too;
+            // "label place auto|spec|normal" selects offset handling (auto
+            // is our behavior, spec offsets are not modeled).
+            / kw("place") __ v:op_side() { AxisProp::LabelOp(v) }
+            / kw("place") __ (kw("auto") / kw("spec")) { AxisProp::Ignored }
             / s:qstring() { AxisProp::LabelText(s) }
             / [_]* { AxisProp::Ignored }
 
