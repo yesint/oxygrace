@@ -52,7 +52,10 @@ enum Item {
 /// produced runs carry resolved *face* indices via `map`.
 fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
     let mut items: Vec<Item> = Vec::new();
-    let mut font = base_font;
+    // `font` always holds a resolved *face*: numeric selections go through
+    // the slot map (get_mapped_font), names and \x resolve directly by name
+    // (get_font_by_name), exactly as WriteString does.
+    let mut font = resolve_face(base_font, map);
     let mut scale = 1.0f32;
     // Current vertical shift and the "baseline" that \v{} / \N return to
     // (WriteString's `vshift` and `baseline`, in base-em units).
@@ -69,7 +72,7 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
             if !buf.is_empty() {
                 items.push(Item::Run(StyledRun {
                     text: std::mem::take(&mut buf),
-                    font: resolve_face($font, map),
+                    font: $font,
                     scale: $scale,
                     baseline: $vshift,
                     color,
@@ -93,7 +96,7 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
         } else {
             c as u32
         };
-        buf.push(crate::font::map_font_char(resolve_face(font, map), code));
+        buf.push(crate::font::map_font_char(font, code));
     };
 
     let mut chars = input.chars().peekable();
@@ -111,7 +114,7 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
             // Font selection by single digit: \0..\9
             '0'..='9' => {
                 flushcur!();
-                font = next.to_digit(10).unwrap() as i32;
+                font = resolve_face(next.to_digit(10).unwrap() as i32, map);
                 chars.next();
             }
             // Escapes taking a {...} argument.
@@ -135,9 +138,13 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
                     'f' => {
                         flushcur!();
                         font = if a.is_empty() {
-                            base_font
+                            resolve_face(base_font, map)
+                        } else if let Ok(n) = a.parse::<i32>() {
+                            resolve_face(n, map)
                         } else {
-                            parse_font_arg(a, base_font)
+                            // Font names address the face directly.
+                            crate::font::face_by_name(a)
+                                .unwrap_or_else(|| resolve_face(base_font, map))
                         };
                     }
                     'R' => {
@@ -226,7 +233,7 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
             }
             'x' => {
                 flushcur!();
-                font = 12; // Symbol font
+                font = crate::font::FACE_SYMBOL;
                 chars.next();
             }
             // Subscript: shift down 0.4 of the *current* size, then shrink
@@ -303,7 +310,7 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
             // \B: revert to the base font only (font/charset, not size).
             'B' => {
                 flushcur!();
-                font = base_font;
+                font = resolve_face(base_font, map);
                 chars.next();
             }
             // Unknown single-char escape: drop the marker char.
@@ -337,20 +344,6 @@ fn resolve_face(slot: i32, map: &FontMap) -> i32 {
     }
 }
 
-fn parse_font_arg(arg: &str, base_font: i32) -> i32 {
-    let a = arg.trim();
-    if let Ok(n) = a.parse::<i32>() {
-        return n;
-    }
-    // Allow a few common font names.
-    match a.to_ascii_lowercase().as_str() {
-        "times-roman" | "times" => 0,
-        "helvetica" => 4,
-        "courier" => 8,
-        "symbol" => 12,
-        _ => base_font,
-    }
-}
 
 /// A glyph positioned along the text baseline, in em units of the base size.
 pub struct LaidGlyph {

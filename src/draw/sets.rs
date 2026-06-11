@@ -41,16 +41,45 @@ pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
             .get(&(set as *const Set as usize))
             .map(|(o, r)| (*o, r.as_deref()))
             .unwrap_or((0.0, None));
-        draw_set_fill(canvas, &wt, graph, set, refy);
+        // Grace fills from inside drawsetline, so only set types whose
+        // dispatch calls it get a fill — not hilo or xyr.
+        if !matches!(set.set_type, SetType::XyHiLo | SetType::XyR) {
+            draw_set_fill(canvas, &wt, graph, set, refy);
+        }
         if set.dropline {
             draw_droplines(canvas, &wt, graph, set);
         }
         draw_set_errbars(canvas, &wt, graph, set, off, refy);
-        if !is_bar(set.set_type) {
+        // Per-type extras and which standard elements draw, per plotone's
+        // dispatch: hilo replaces line+symbols entirely; boxplot keeps the
+        // connecting line; vmap and xyr keep symbols.
+        let (want_line, want_syms) = match set.set_type {
+            SetType::XyHiLo => {
+                draw_hilo(canvas, &wt, set);
+                (false, false)
+            }
+            SetType::BoxPlot => {
+                draw_set_line(canvas, &wt, set, refy);
+                draw_boxplot(canvas, &wt, graph, set);
+                (false, false)
+            }
+            SetType::XyVMap => {
+                draw_set_line(canvas, &wt, set, refy);
+                draw_vmap(canvas, &wt, graph, set);
+                (false, true)
+            }
+            SetType::XyR => {
+                draw_circlexy(canvas, &wt, graph, set);
+                (false, true)
+            }
+            t if is_bar(t) => (false, false),
+            _ => (true, true),
+        };
+        if want_line {
             draw_set_line(canvas, &wt, set, refy);
         }
         canvas.clear_clip();
-        if !is_bar(set.set_type) {
+        if want_syms {
             draw_set_symbols(canvas, &wt, graph, set, refy);
         }
         if set.avalue.active {
@@ -294,6 +323,176 @@ fn draw_one_errbar(canvas: &mut Canvas, graph: &Graph, eb: &crate::model::ErrBar
     let minus = VPoint { x: vp2.x - ilen * uy, y: vp2.y + ilen * ux };
     let plus = VPoint { x: vp2.x + ilen * uy, y: vp2.y - ilen * ux };
     canvas.draw_polyline(&[minus, plus], eb.color, eb.linewidth, eb.linestyle);
+}
+
+/// Hi/Lo/Open/Close set (plotone.cpp `drawsethilo`): a vertical line from
+/// y1 (high) to y2 (low), an "open" tick to the left at y3 and a "close"
+/// tick to the right at y4, all with the symbol pen.
+fn draw_hilo(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
+    if set.symbol_linestyle == 0 {
+        return;
+    }
+    let cols = &set.data.cols;
+    let (Some(xs), Some(y1), Some(y2), Some(y3), Some(y4)) = (
+        cols.first(),
+        cols.get(1),
+        cols.get(2),
+        cols.get(3),
+        cols.get(4),
+    ) else {
+        return;
+    };
+    let ilen = 0.02 * set.symbol_size;
+    let n = xs.len().min(y1.len()).min(y2.len()).min(y3.len()).min(y4.len());
+    for i in 0..n {
+        let (color, lw, ls) = (set.symbol_pen.color, set.symbol_linewidth, set.symbol_linestyle);
+        let (x1, vy1) = wt.world_to_view(xs[i], y1[i]);
+        let (_, vy2) = wt.world_to_view(xs[i], y2[i]);
+        canvas.draw_polyline(&[VPoint { x: x1, y: vy1 }, VPoint { x: x1, y: vy2 }], color, lw, ls);
+        let (_, vy3) = wt.world_to_view(xs[i], y3[i]);
+        canvas.draw_polyline(
+            &[VPoint { x: x1, y: vy3 }, VPoint { x: x1 - ilen, y: vy3 }],
+            color,
+            lw,
+            ls,
+        );
+        let (_, vy4) = wt.world_to_view(xs[i], y4[i]);
+        canvas.draw_polyline(
+            &[VPoint { x: x1, y: vy4 }, VPoint { x: x1 + ilen, y: vy4 }],
+            color,
+            lw,
+            ls,
+        );
+    }
+}
+
+/// Boxplot set (plotone.cpp `drawsetboxplot`): per point a box from the
+/// lower to the upper bound (half-width 0.01*symsize) with a median line,
+/// and error-bar whiskers from the box edges to the whisker values.
+fn draw_boxplot(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &Set) {
+    let cols = &set.data.cols;
+    let (Some(xs), Some(md), Some(lb), Some(ub), Some(lw_), Some(uw)) = (
+        cols.first(),
+        cols.get(1),
+        cols.get(2),
+        cols.get(3),
+        cols.get(4),
+        cols.get(5),
+    ) else {
+        return;
+    };
+    let size = 0.01 * set.symbol_size;
+    let n = [xs.len(), md.len(), lb.len(), ub.len(), lw_.len(), uw.len()]
+        .into_iter()
+        .min()
+        .unwrap_or(0);
+    for i in 0..n {
+        let (vx, vlb) = wt.world_to_view(xs[i], lb[i]);
+        let (_, vub) = wt.world_to_view(xs[i], ub[i]);
+        // Whiskers from the box edges to the whisker values.
+        if set.errbar.active {
+            let (_, vlw) = wt.world_to_view(xs[i], lw_[i]);
+            let (_, vuw) = wt.world_to_view(xs[i], uw[i]);
+            draw_one_errbar(canvas, graph, &set.errbar, VPoint { x: vx, y: vlb }, VPoint { x: vx, y: vlw });
+            draw_one_errbar(canvas, graph, &set.errbar, VPoint { x: vx, y: vub }, VPoint { x: vx, y: vuw });
+        }
+        // Box: symbol fill pen, then the symbol pen outline.
+        let rect = [
+            VPoint { x: vx - size, y: vlb },
+            VPoint { x: vx + size, y: vlb },
+            VPoint { x: vx + size, y: vub },
+            VPoint { x: vx - size, y: vub },
+        ];
+        if set.symbol_fill.pattern != 0 {
+            canvas.fill_polygon(&rect, set.symbol_fill.color, set.symbol_fill.pattern);
+        }
+        if set.symbol_linestyle != 0 {
+            let mut closed = rect.to_vec();
+            closed.push(rect[0]);
+            canvas.draw_polyline(&closed, set.symbol_pen.color, set.symbol_linewidth, set.symbol_linestyle);
+            // Median line across the box.
+            let (_, vmd) = wt.world_to_view(xs[i], md[i]);
+            canvas.draw_polyline(
+                &[VPoint { x: vx - size, y: vmd }, VPoint { x: vx + size, y: vmd }],
+                set.symbol_pen.color,
+                set.symbol_linewidth,
+                set.symbol_linestyle,
+            );
+        }
+    }
+}
+
+/// XYR set (plotone.cpp `drawcirclexy`): an ellipse inscribed in the world
+/// rectangle (x-r, y-r)..(x+r, y+r) — a circle when both world scales are
+/// equal — filled with the set fill pen, outlined with the line pen. Points
+/// outside the world window are skipped.
+fn draw_circlexy(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &Set) {
+    let cols = &set.data.cols;
+    let (Some(xs), Some(ys), Some(rs)) = (cols.first(), cols.get(1), cols.get(2)) else {
+        return;
+    };
+    let n = xs.len().min(ys.len()).min(rs.len());
+    let w = &graph.world;
+    let (wx0, wx1) = (w.xmin.min(w.xmax), w.xmin.max(w.xmax));
+    let (wy0, wy1) = (w.ymin.min(w.ymax), w.ymin.max(w.ymax));
+    for i in 0..n {
+        if xs[i] < wx0 || xs[i] > wx1 || ys[i] < wy0 || ys[i] > wy1 {
+            continue;
+        }
+        let (x1, y1) = wt.world_to_view(xs[i] - rs[i], ys[i] - rs[i]);
+        let (x2, y2) = wt.world_to_view(xs[i] + rs[i], ys[i] + rs[i]);
+        let (p1, p2) = (VPoint { x: x1, y: y1 }, VPoint { x: x2, y: y2 });
+        if set.fill_type != FillType::None && set.fill_pen.pattern != 0 {
+            canvas.fill_ellipse(p1, p2, set.fill_pen.color, set.fill_pen.pattern);
+        }
+        if set.linestyle != 0 {
+            canvas.stroke_ellipse(p1, p2, set.line_pen.color, set.linewidth, set.linestyle);
+        }
+    }
+}
+
+/// Vector-map set (plotone.cpp `drawsetvmap`): an arrow from each point,
+/// the vector (vx, vy)/znorm applied in *view* units; riser and head use
+/// the error-bar pens, the open head is 2*errbar.size long.
+fn draw_vmap(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &Set) {
+    if graph.znorm == 0.0 {
+        return;
+    }
+    let cols = &set.data.cols;
+    let (Some(xs), Some(ys), Some(vxs), Some(vys)) =
+        (cols.first(), cols.get(1), cols.get(2), cols.get(3))
+    else {
+        return;
+    };
+    let eb = &set.errbar;
+    let n = xs.len().min(ys.len()).min(vxs.len()).min(vys.len());
+    let w = &graph.world;
+    let (wx0, wx1) = (w.xmin.min(w.xmax), w.xmin.max(w.xmax));
+    let (wy0, wy1) = (w.ymin.min(w.ymax), w.ymin.max(w.ymax));
+    for i in 0..n {
+        if xs[i] < wx0 || xs[i] > wx1 || ys[i] < wy0 || ys[i] > wy1 {
+            continue;
+        }
+        let (vx, vy) = wt.world_to_view(xs[i], ys[i]);
+        let p1 = VPoint { x: vx, y: vy };
+        let p2 = VPoint {
+            x: vx + vxs[i] / graph.znorm,
+            y: vy + vys[i] / graph.znorm,
+        };
+        canvas.draw_polyline(&[p1, p2], eb.color, eb.riser_linewidth, eb.riser_linestyle);
+        // Open arrowhead at p2 (draw_arrowhead, type 0, length 2*barsize).
+        let (lx, ly) = (p2.x - p1.x, p2.y - p1.y);
+        let vlen = (lx * lx + ly * ly).sqrt();
+        if vlen == 0.0 {
+            continue;
+        }
+        let (ux, uy) = (lx / vlen, ly / vlen);
+        let big_l = 0.01 * (2.0 * eb.size);
+        let vpc = VPoint { x: p2.x - big_l * ux, y: p2.y - big_l * uy };
+        let vpl = VPoint { x: vpc.x + 0.5 * big_l * uy, y: vpc.y - 0.5 * big_l * ux };
+        let vpr = VPoint { x: vpc.x - 0.5 * big_l * uy, y: vpc.y + 0.5 * big_l * ux };
+        canvas.draw_polyline(&[vpl, p2, vpr], eb.color, eb.linewidth, 1);
+    }
 }
 
 /// Draw vertical droplines from each point down to the set's baseline.

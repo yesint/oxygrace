@@ -16,8 +16,11 @@ use crate::render::transform::PageTransform;
 use crate::text;
 
 /// Build a 16x16 RGBA tile for a Grace fill pattern in the given color.
-/// Set bits get the opaque color; unset bits are transparent.
-fn pattern_tile(pattern: i32, color: Rgba) -> Option<Pixmap> {
+/// Set bits get the foreground color, unset bits the **background** color:
+/// Grace pattern fills are opaque (the gd driver tiles fg-on-bg), so a
+/// patterned shape occludes whatever is below it — overlapping hatched
+/// circles in txyr.agr shingle cleanly instead of showing buried outlines.
+fn pattern_tile(pattern: i32, color: Rgba, bg: Rgba) -> Option<Pixmap> {
     let idx = pattern as usize;
     if !(0..PATTERN_BITS.len()).contains(&idx) {
         return None;
@@ -29,12 +32,9 @@ fn pattern_tile(pattern: i32, color: Rgba) -> Option<Pixmap> {
         for col in 0..16 {
             // LSB-first within each byte (X11 bitmap order).
             let byte = bits[row * 2 + col / 8];
-            if (byte >> (col % 8)) & 1 == 1 {
-                // Premultiplied opaque color.
-                px[row * 16 + col] =
-                    tiny_skia::PremultipliedColorU8::from_rgba(color.r, color.g, color.b, 255)
-                        .unwrap();
-            }
+            let c = if (byte >> (col % 8)) & 1 == 1 { color } else { bg };
+            px[row * 16 + col] =
+                tiny_skia::PremultipliedColorU8::from_rgba(c.r, c.g, c.b, 255).unwrap();
         }
     }
     Some(tile)
@@ -222,8 +222,9 @@ impl<'a> Canvas<'a> {
                 .fill_path(path, &paint, rule, Transform::identity(), self.clip.as_ref());
             return;
         }
-        // Hatched pattern: tile a 16x16 stencil in the foreground color.
-        let Some(tile) = pattern_tile(pattern, rgba) else {
+        // Hatched pattern: tile a 16x16 stencil, foreground on background.
+        let bg = color::resolve(self.project, 0);
+        let Some(tile) = pattern_tile(pattern, rgba, bg) else {
             // Unknown pattern -> fall back to solid.
             paint.set_color(rgba.to_skia());
             self.pixmap

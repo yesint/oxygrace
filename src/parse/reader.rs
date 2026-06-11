@@ -185,6 +185,62 @@ fn postprocess_version(project: &mut Project, version: i32) {
             s.just |= 12; // JUST_MIDDLE
         }
     }
+    // Per-set fixups from graphs.cpp postprocess_project.
+    for graph in &mut project.graphs {
+        let gtype = graph.graph_type;
+        for set in &mut graph.sets {
+            use crate::model::SetType;
+            // Old files had no separate symbol/symbol-fill colors.
+            if version < 40004 && gtype != crate::model::GraphType::Chart {
+                set.symbol_pen.color = set.line_pen.color;
+            }
+            if version < 40200 {
+                set.symbol_fill.color = set.symbol_pen.color;
+            }
+            // Hi/Lo sets drew with the line width before 4.1.2, and gained
+            // avalue support only in 5.1.13.
+            if version <= 40102 && set.set_type == SetType::XyHiLo {
+                set.symbol_linewidth = set.linewidth;
+            }
+            if version <= 50112 && set.set_type == SetType::XyHiLo {
+                set.avalue.active = false;
+            }
+            // Boxplots before 5.1.0 drew from the line pens, with fixed
+            // symbol size, no connecting line and capless whiskers.
+            if version < 50100 && set.set_type == SetType::BoxPlot {
+                set.symbol_linewidth = set.linewidth;
+                set.symbol_linestyle = set.linestyle;
+                set.symbol_size = 2.0;
+                set.errbar.riser_linewidth = set.linewidth;
+                set.errbar.riser_linestyle = set.linestyle;
+                set.linestyle = 0;
+                set.errbar.size = 0.0;
+            }
+            // Error bars: pre-5.0.3 files always show them, color them from
+            // the symbol pen, and use inverted placement semantics.
+            if version < 50003 {
+                set.errbar.active = true;
+                set.errbar.color = set.symbol_pen.color;
+                set.errbar.place = match set.errbar.place {
+                    0 => 1,
+                    1 => 0,
+                    _ => match set.set_type {
+                        SetType::XyDxDx | SetType::XyDyDy | SetType::BarDyDy => 0,
+                        _ => 2,
+                    },
+                };
+            }
+            if version < 50002 {
+                set.errbar.size *= 2.0;
+            }
+        }
+        // Pie charts honor the X world only from 5.1.5 on.
+        if version < 50105 && gtype == crate::model::GraphType::Pie {
+            graph.world.xmin = 0.0;
+            graph.world.xmax = 2.0 * std::f64::consts::PI;
+            graph.xinvert = false;
+        }
+    }
 }
 
 /// Write the accumulated data rows into the target dataset, then clear them.

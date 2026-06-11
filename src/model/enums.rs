@@ -48,7 +48,8 @@ impl SetType {
         use SetType::*;
         match self {
             Xy | Bar => 2,
-            XyDx | XyDy | Xyz | XyR | XySize | XyColor | XyColPat | XyVMap | BarDy => 3,
+            XyDx | XyDy | Xyz | XyR | XySize | XyColor | XyColPat | BarDy => 3,
+            XyVMap => 4,
             XyDxDx | XyDyDy | XyDxDy | BarDyDy => 4,
             XyHiLo => 5,
             XyDxDxDyDy | BoxPlot => 6,
@@ -77,7 +78,7 @@ impl SetType {
             "xycolor" => XyColor,
             "xycolpat" => XyColPat,
             "xyvmap" => XyVMap,
-            "boxplot" => BoxPlot,
+            "boxplot" | "xyboxplot" => BoxPlot,
             "band" => Band,
             _ => return None,
         })
