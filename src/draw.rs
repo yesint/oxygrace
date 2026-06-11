@@ -4,6 +4,7 @@
 pub mod axes;
 pub mod objects;
 pub mod decor;
+pub mod pie;
 pub mod plot;
 pub mod sets;
 

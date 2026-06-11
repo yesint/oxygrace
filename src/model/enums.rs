@@ -48,8 +48,8 @@ impl SetType {
         use SetType::*;
         match self {
             Xy | Bar => 2,
-            XyDx | XyDy | Xyz | XyR | XySize | XyColor | XyColPat | BarDy => 3,
-            XyVMap => 4,
+            XyDx | XyDy | Xyz | XyR | XySize | XyColor | BarDy => 3,
+            XyColPat | XyVMap => 4,
             XyDxDx | XyDyDy | XyDxDy | BarDyDy => 4,
             XyHiLo => 5,
             XyDxDxDyDy | BoxPlot => 6,

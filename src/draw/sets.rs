@@ -69,7 +69,7 @@ pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
                 (false, true)
             }
             SetType::XyR => {
-                draw_circlexy(canvas, &wt, graph, set);
+                draw_circlexy(canvas, &wt, set);
                 (false, true)
             }
             t if is_bar(t) => (false, false),
@@ -83,7 +83,7 @@ pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
             draw_set_symbols(canvas, &wt, graph, set, refy);
         }
         if set.avalue.active {
-            draw_avalues(canvas, &wt, graph, set, off, refy);
+            draw_avalues(canvas, &wt, set, off, refy);
         }
         canvas.set_clip_view(v.xmin, v.ymin, v.xmax, v.ymax);
     }
@@ -141,7 +141,6 @@ fn chart_layout_map(graph: &Graph) -> std::collections::HashMap<usize, (f64, Opt
 fn draw_avalues(
     canvas: &mut Canvas,
     wt: &WorldTransform,
-    graph: &Graph,
     set: &Set,
     group_offset: f64,
     refy: Option<&[f64]>,
@@ -155,14 +154,11 @@ fn draw_avalues(
     };
     let n = xs.len().min(ys.len());
     let z = set.data.cols.get(2);
-    let w = &graph.world;
-    let (wx0, wx1) = (w.xmin.min(w.xmax), w.xmin.max(w.xmax));
-    let (wy0, wy1) = (w.ymin.min(w.ymax), w.ymin.max(w.ymax));
-
-    for i in 0..n {
+    let skip = set.symskip.max(0) as usize + 1;
+    for i in (0..n).step_by(skip) {
         let wx = xs[i];
         let wy = ys[i] + refy.and_then(|r| r.get(i)).copied().unwrap_or(0.0);
-        if wx < wx0 || wx > wx1 || wy < wy0 || wy > wy1 {
+        if !wt.valid_wpoint(wx, wy) {
             continue;
         }
         let value = match av.avtype {
@@ -426,17 +422,14 @@ fn draw_boxplot(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &S
 /// rectangle (x-r, y-r)..(x+r, y+r) — a circle when both world scales are
 /// equal — filled with the set fill pen, outlined with the line pen. Points
 /// outside the world window are skipped.
-fn draw_circlexy(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &Set) {
+fn draw_circlexy(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
     let cols = &set.data.cols;
     let (Some(xs), Some(ys), Some(rs)) = (cols.first(), cols.get(1), cols.get(2)) else {
         return;
     };
     let n = xs.len().min(ys.len()).min(rs.len());
-    let w = &graph.world;
-    let (wx0, wx1) = (w.xmin.min(w.xmax), w.xmin.max(w.xmax));
-    let (wy0, wy1) = (w.ymin.min(w.ymax), w.ymin.max(w.ymax));
     for i in 0..n {
-        if xs[i] < wx0 || xs[i] > wx1 || ys[i] < wy0 || ys[i] > wy1 {
+        if !wt.valid_wpoint(xs[i], ys[i]) {
             continue;
         }
         let (x1, y1) = wt.world_to_view(xs[i] - rs[i], ys[i] - rs[i]);
@@ -466,11 +459,8 @@ fn draw_vmap(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &Set)
     };
     let eb = &set.errbar;
     let n = xs.len().min(ys.len()).min(vxs.len()).min(vys.len());
-    let w = &graph.world;
-    let (wx0, wx1) = (w.xmin.min(w.xmax), w.xmin.max(w.xmax));
-    let (wy0, wy1) = (w.ymin.min(w.ymax), w.ymin.max(w.ymax));
     for i in 0..n {
-        if xs[i] < wx0 || xs[i] > wx1 || ys[i] < wy0 || ys[i] > wy1 {
+        if !wt.valid_wpoint(xs[i], ys[i]) {
             continue;
         }
         let (vx, vy) = wt.world_to_view(xs[i], ys[i]);
@@ -700,13 +690,36 @@ fn draw_set_line(
     // on a log axis) map to view 0 and the viewport clip trims the segment,
     // exactly as in Grace (xy_yconv_general + clip_line) — lines are never
     // broken at domain gaps.
-    let mut segment: Vec<VPoint> = Vec::with_capacity(2 * n);
-    for i in 0..n {
+    let at = |i: usize| {
         // Stacked charts draw the line at the accumulated height
         // (drawsetline: wptmp.y += refy[i]).
         let y = ys[i] + refy.and_then(|r| r.get(i)).copied().unwrap_or(0.0);
         let (vx, vy) = wt.world_to_view(xs[i], y);
-        let p = VPoint { x: vx, y: vy };
+        VPoint { x: vx, y: vy }
+    };
+
+    // Segment line types draw disconnected runs of 2 / 3 points
+    // (drawsetline LINE_TYPE_SEGMENT2/3).
+    let group = match set.line_type {
+        LineType::Segment2 => 2,
+        LineType::Segment3 => 3,
+        _ => 0,
+    };
+    if group > 0 {
+        let mut i = 0;
+        while i < n {
+            let seg: Vec<VPoint> = (i..n.min(i + group)).map(&at).collect();
+            if seg.len() >= 2 {
+                canvas.draw_polyline(&seg, set.line_pen.color, set.linewidth, set.linestyle);
+            }
+            i += group;
+        }
+        return;
+    }
+
+    let mut segment: Vec<VPoint> = Vec::with_capacity(2 * n);
+    for i in 0..n {
+        let p = at(i);
         // Insert the stair step vertex between consecutive points.
         if let Some(&prev) = segment.last() {
             match set.line_type {
@@ -752,17 +765,13 @@ fn draw_set_symbols(
     let do_fill = set.symbol_fill.pattern != 0;
     let do_outline = set.symbol_linestyle != 0;
 
-    // World window for the point-inside test (Grace `is_validWPoint`).
-    let w = &graph.world;
-    let (wx0, wx1) = (w.xmin.min(w.xmax), w.xmin.max(w.xmax));
-    let (wy0, wy1) = (w.ymin.min(w.ymax), w.ymin.max(w.ymax));
-
-    for i in 0..n {
+    let skip = set.symskip.max(0) as usize + 1;
+    for i in (0..n).step_by(skip) {
         let y = ys[i] + refy.and_then(|r| r.get(i)).copied().unwrap_or(0.0);
         // Grace skips symbols whose data point lies outside the world window
         // (`drawsetsyms` -> `is_validWPoint`); symbols are not clipped, so one
         // sitting on the frame edge may overhang it, exactly as in Grace.
-        if xs[i] < wx0 || xs[i] > wx1 || y < wy0 || y > wy1 {
+        if !wt.valid_wpoint(xs[i], y) {
             continue;
         }
         let (vx, vy) = wt.world_to_view(xs[i], y);

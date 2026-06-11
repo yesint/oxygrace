@@ -124,6 +124,7 @@ pub enum SetProp {
     SymbolFillPattern(i32),
     SymbolLinewidth(f64),
     SymbolChar(i32),
+    SymbolSkip(i32),
     SymbolCharFont(i32),
     SymbolLinestyle(i32),
     LineType(i32),
@@ -625,6 +626,7 @@ peg::parser! {
             / kw("fill") __ kw("color") __ n:iflex() { SetProp::SymbolFillColor(n) }
             / kw("fill") __ kw("pattern") __ n:iflex() { SetProp::SymbolFillPattern(n) }
             / kw("char") __ kw("font") __ n:iflex() { SetProp::SymbolCharFont(n) }
+            / kw("skip") __ n:iflex() { SetProp::SymbolSkip(n) }
             / kw("char") __ n:iflex() { SetProp::SymbolChar(n) }
             / kw("linewidth") __ n:num() { SetProp::SymbolLinewidth(n) }
             / kw("linestyle") __ n:iflex() { SetProp::SymbolLinestyle(n) }

@@ -101,6 +101,14 @@ pub struct WorldTransform {
     yscale: ScaleType,
     xinvert: bool,
     yinvert: bool,
+    /// Polar graphs: world x is the angle phi, world y the radius rho
+    /// (draw.cpp `COORDINATES_POLAR`).
+    polar: bool,
+    /// World rho-max and the world window (for the polar point test).
+    wymin: f64,
+    wymax: f64,
+    wxmin: f64,
+    wxmax: f64,
     // Pre-scaled world window bounds.
     sx0: f64,
     sx1: f64,
@@ -133,6 +141,11 @@ impl WorldTransform {
             yscale: graph.yscale,
             xinvert: graph.xinvert,
             yinvert: graph.yinvert,
+            polar: graph.graph_type == crate::model::GraphType::Polar,
+            wymin: ymin,
+            wymax: ymax,
+            wxmin: xmin,
+            wxmax: xmax,
             sx0,
             sx1,
             sy0,
@@ -152,7 +165,36 @@ impl WorldTransform {
     /// then trims whatever geometry reaches toward the page corner. Grace
     /// never skips such points.
     pub fn world_to_view(&self, wx: f64, wy: f64) -> (f64, f64) {
+        if self.polar {
+            // Polar graphs: world (phi, rho) maps to the viewport center plus
+            // rho-scaled (cos, sin); phi flips with xinvert (definewindow
+            // GRAPH_POLAR: xv_rc = +-1, yv_rc = min(w,h)/2 / rho_max).
+            let (cx, cy, rc) = self.polar_params();
+            let sign = if self.xinvert { -1.0 } else { 1.0 };
+            let phi = sign * wx;
+            return (cx + rc * wy * phi.cos(), cy + rc * wy * phi.sin());
+        }
         (self.x_to_view(wx), self.y_to_view(wy))
+    }
+
+    /// Polar center and rho->view rate.
+    pub fn polar_params(&self) -> (f64, f64, f64) {
+        let cx = (self.vx0 + self.vx1) / 2.0;
+        let cy = (self.vy0 + self.vy1) / 2.0;
+        let rc = 0.5 * (self.vx1 - self.vx0).min(self.vy1 - self.vy0) / self.wymax;
+        (cx, cy, rc)
+    }
+
+    /// Grace `is_validWPoint`: inside the world window, except polar graphs
+    /// only restrict the radius to 0..rho_max (draw.cpp).
+    pub fn valid_wpoint(&self, wx: f64, wy: f64) -> bool {
+        if self.polar {
+            return wy >= 0.0 && wy <= self.wymax;
+        }
+        wx >= self.wxmin.min(self.wxmax)
+            && wx <= self.wxmin.max(self.wxmax)
+            && wy >= self.wymin.min(self.wymax)
+            && wy <= self.wymin.max(self.wymax)
     }
 
     /// Map a world X value to its view X coordinate (0 if out of domain,

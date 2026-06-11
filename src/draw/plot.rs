@@ -2,7 +2,7 @@
 //! (`src/plotone.cpp`): frame fill → grid/data → axes+ticks → frame border →
 //! titles. Legend and annotation objects are added in later milestones.
 
-use crate::draw::{axes, decor, objects, sets};
+use crate::draw::{axes, decor, objects, pie, sets};
 use crate::model::{Graph, Project};
 use crate::render::{Canvas, HAlign, VAlign, VPoint};
 
@@ -27,8 +27,17 @@ pub fn draw_project(project: &Project, fonts: &crate::font::FontSet) -> Vec<u8> 
 /// Draw one graph in Grace's layering order.
 fn draw_graph(canvas: &mut Canvas, graph: &Graph) {
     fill_frame(canvas, graph);
-    // Grid lines are emitted inside draw_axes (before bars), then data, then
-    // the ticks/labels and finally the frame border on top.
+    // Pie graphs draw the slices only: no axes, no legend (plotone skips
+    // drawaxes/dolegend for GRAPH_PIE); frame and titles still apply.
+    if graph.graph_type == crate::model::GraphType::Pie {
+        pie::draw_pie(canvas, graph);
+        draw_frame_border(canvas, graph);
+        draw_titles(canvas, graph);
+        return;
+    }
+    // Grid first (under everything: plotone calls drawgrid right after the
+    // frame fill), then data, then axes, then the frame border on top.
+    axes::draw_grid(canvas, graph);
     sets::draw_sets(canvas, graph);
     axes::draw_axes(canvas, graph);
     draw_frame_border(canvas, graph);

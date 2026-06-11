@@ -617,6 +617,7 @@ fn apply_set(set: &mut crate::model::Set, prop: SetProp) {
         SetProp::SymbolFillPattern(n) => set.symbol_fill.pattern = n,
         SetProp::SymbolLinewidth(n) => set.symbol_linewidth = n,
         SetProp::SymbolChar(n) => set.symbol_char = n.clamp(0, 255) as u8,
+        SetProp::SymbolSkip(n) => set.symskip = n.max(0),
         SetProp::SymbolCharFont(n) => set.symbol_char_font = n,
         SetProp::SymbolLinestyle(n) => set.symbol_linestyle = n,
         SetProp::LineType(n) => set.line_type = LineType::from_code(n),

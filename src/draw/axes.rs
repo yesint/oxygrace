@@ -20,6 +20,10 @@ const MAX_TICKS: usize = 256;
 /// Draw all active axes of a graph.
 pub fn draw_axes(canvas: &mut Canvas, graph: &Graph) {
     let wt = WorldTransform::new(graph);
+    if graph.graph_type == crate::model::GraphType::Polar {
+        draw_polar_axes(canvas, graph, &wt);
+        return;
+    }
     for id in [AxisId::X, AxisId::Y, AxisId::AltX, AxisId::AltY] {
         let axis = &graph.axes[id.index()];
         if axis.active {
@@ -28,21 +32,72 @@ pub fn draw_axes(canvas: &mut Canvas, graph: &Graph) {
     }
 }
 
-fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: AxisId, axis: &Axis) {
-    let v = graph.view;
-    let is_x = id.is_x();
-    // Position of this axis along the perpendicular direction (the frame edge
-    // it sits on). For the primary X/Y axes that is the bottom / left edge.
+/// Sample an arc at constant world radius `rho` from `phi1` to `phi2` into
+/// view points (polar graphs draw grid circles and axis bars as arcs:
+/// drawgrid / the t_drawbar arc in drawticks.cpp).
+fn polar_arc(wt: &WorldTransform, rho: f64, phi1: f64, phi2: f64) -> Vec<VPoint> {
+    let steps = (((phi2 - phi1).abs() / 0.02).ceil() as usize).max(2);
+    (0..=steps)
+        .map(|k| {
+            let phi = phi1 + (phi2 - phi1) * k as f64 / steps as f64;
+            let (x, y) = wt.world_to_view(phi, rho);
+            VPoint { x, y }
+        })
+        .collect()
+}
+
+/// Axes of a polar graph: the phi axis (x) bar is an arc at the outer (and,
+/// with placement "both", inner) radius; the rho axis (y) bar is the radial
+/// line at the start angle. Grid lines: rho ticks make arcs across the phi
+/// range, phi ticks make radial lines. Polar tick labels are not drawn
+/// (mirrors what gracebat shows for polar.agr).
+fn draw_polar_axes(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform) {
+    let w = &graph.world;
+
+    for id in [AxisId::X, AxisId::Y] {
+        let axis = &graph.axes[id.index()];
+        if !axis.active {
+            continue;
+        }
+        let is_x = id.is_x();
+        // Axis bars (grids are drawn in the separate pre-data pass).
+        if axis.draw_bar {
+            if is_x {
+                // Arc at the outer radius; placement "both" adds the inner.
+                if axis.op != 1 {
+                    let pts = polar_arc(wt, w.ymax, w.xmin, w.xmax);
+                    canvas.draw_polyline(&pts, axis.bar_color, axis.bar_linewidth, axis.bar_linestyle);
+                }
+                if axis.op != 0 {
+                    let pts = polar_arc(wt, w.ymin, w.xmin, w.xmax);
+                    canvas.draw_polyline(&pts, axis.bar_color, axis.bar_linewidth, axis.bar_linestyle);
+                }
+            } else {
+                // Radial bar at the start angle.
+                let (x1, y1) = wt.world_to_view(w.xmin, w.ymin);
+                let (x2, y2) = wt.world_to_view(w.xmin, w.ymax);
+                canvas.draw_polyline(
+                    &[VPoint { x: x1, y: y1 }, VPoint { x: x2, y: y2 }],
+                    axis.bar_color,
+                    axis.bar_linewidth,
+                    axis.bar_linestyle,
+                );
+            }
+        }
+    }
+}
+
+/// Tick positions for one axis: the specified ticks (TICKS_SPEC) when set,
+/// otherwise the generated grid; out-of-window positions are skipped like in
+/// Grace's draw loops.
+fn axis_ticks(graph: &Graph, is_x: bool, axis: &Axis) -> (Vec<f64>, Vec<f64>) {
     let (wmin, wmax) = if is_x {
         (graph.world.xmin, graph.world.xmax)
     } else {
         (graph.world.ymin, graph.world.ymax)
     };
-
     let scale = if is_x { graph.xscale } else { graph.yscale };
-    // Specified ticks (TICKS_SPEC_MARKS/BOTH) replace the generated grid;
-    // out-of-window positions are skipped like in Grace's draw loops.
-    let (majors, minors) = if axis.spec_type != 0 {
+    if axis.spec_type != 0 {
         let n = if axis.spec_count > 0 {
             axis.spec_count.min(axis.spec_ticks.len())
         } else {
@@ -73,19 +128,55 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
             axis.tick_round,
         );
         (grid.majors, grid.minors)
-    };
+    }
+}
 
-    // Grid lines first so ticks/data sit on top.
-    if axis.major_props.grid {
-        for &t in &majors {
-            draw_grid_line(canvas, wt, &v, is_x, t, axis.major_props.color, axis.major_props.linewidth, axis.major_props.linestyle);
+/// Draw the grid lines of every active axis. Grace draws grids right after
+/// the frame fill and **before** the data (plotone.cpp: drawgrid), so fills
+/// and sets cover them.
+pub fn draw_grid(canvas: &mut Canvas, graph: &Graph) {
+    let wt = WorldTransform::new(graph);
+    let polar = graph.graph_type == crate::model::GraphType::Polar;
+    let v = graph.view;
+    let w = &graph.world;
+    for id in [AxisId::X, AxisId::Y, AxisId::AltX, AxisId::AltY] {
+        let axis = &graph.axes[id.index()];
+        if !axis.active {
+            continue;
+        }
+        let is_x = id.is_x();
+        let (majors, minors) = axis_ticks(graph, is_x, axis);
+        for (list, props) in [(&minors, &axis.minor_props), (&majors, &axis.major_props)] {
+            if !props.grid {
+                continue;
+            }
+            for &t in list.iter() {
+                if polar {
+                    if is_x {
+                        let (x1, y1) = wt.world_to_view(t, w.ymin);
+                        let (x2, y2) = wt.world_to_view(t, w.ymax);
+                        canvas.draw_polyline(
+                            &[VPoint { x: x1, y: y1 }, VPoint { x: x2, y: y2 }],
+                            props.color,
+                            props.linewidth,
+                            props.linestyle,
+                        );
+                    } else {
+                        let pts = polar_arc(&wt, t, w.xmin, w.xmax);
+                        canvas.draw_polyline(&pts, props.color, props.linewidth, props.linestyle);
+                    }
+                } else {
+                    draw_grid_line(canvas, &wt, &v, is_x, t, props.color, props.linewidth, props.linestyle);
+                }
+            }
         }
     }
-    if axis.minor_props.grid {
-        for &t in &minors {
-            draw_grid_line(canvas, wt, &v, is_x, t, axis.minor_props.color, axis.minor_props.linewidth, axis.minor_props.linestyle);
-        }
-    }
+}
+
+fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: AxisId, axis: &Axis) {
+    let v = graph.view;
+    let is_x = id.is_x();
+    let (majors, minors) = axis_ticks(graph, is_x, axis);
 
     // --- Axis geometry (drawticks.cpp drawaxes): every axis has a normal
     // side (vbase1, at the lower/left world edge) and an opposite side

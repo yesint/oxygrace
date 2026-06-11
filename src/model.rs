@@ -401,6 +401,8 @@ pub struct Set {
     pub symbol_fill: Pen,
     pub symbol_linewidth: f64,
     pub symbol_linestyle: i32,
+    /// Draw every (symskip+1)-th symbol/avalue (`symbol skip`).
+    pub symskip: i32,
     /// Character code for SYM_CHAR symbols (`symbol char`).
     pub symbol_char: u8,
     /// Font slot for SYM_CHAR symbols (`symbol char font`).
@@ -524,6 +526,7 @@ impl Set {
             symbol_fill: pen,
             symbol_linewidth: d.linewidth,
             symbol_linestyle: d.linestyle,
+            symskip: 0,
             symbol_char: 65,
             symbol_char_font: d.font,
             line_type: LineType::Straight,
