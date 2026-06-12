@@ -16,13 +16,20 @@ pub mod color;
 pub mod dates;
 pub mod draw;
 pub mod font;
+pub mod import;
 pub mod model;
 pub mod parse;
 pub mod patterns;
 pub mod render;
 pub mod text;
+pub mod write;
 
+pub use font::FontSet;
 pub use model::Project;
+pub use render::{Bounds, ElementId, OverlayShape, RenderInfo};
+// Re-exported so the pixmap type in [`RenderResult`] is nameable without a
+// separate (potentially version-skewed) tiny-skia dependency.
+pub use tiny_skia;
 
 /// Parse a `.agr`/`.xvg` file from disk into a [`Project`].
 ///
@@ -49,6 +56,22 @@ pub fn render_png(project: &Project) -> Vec<u8> {
     draw::draw_project(project, &fonts)
 }
 
+/// A raster rendering plus the element geometry recorded while drawing it.
+pub struct RenderResult {
+    /// The page as a premultiplied-RGBA pixmap (white background, opaque).
+    pub pixmap: tiny_skia::Pixmap,
+    /// Recorded element geometry: `info.hit_test(x, y, tol)` answers "what
+    /// is at device pixel (x, y)?", `info.bounds(id)` gives selection boxes.
+    pub info: RenderInfo,
+}
+
+/// Render a project to a raw pixmap with hit-test geometry. Takes the
+/// [`FontSet`] by reference so long-lived callers (a GUI) load fonts once.
+pub fn render_pixmap(project: &Project, fonts: &FontSet) -> RenderResult {
+    let (pixmap, info) = draw::draw_project_pixmap(project, fonts);
+    RenderResult { pixmap, info }
+}
+
 /// Render a project to an SVG document using the bundled fonts. Text is
 /// emitted as glyph outline paths, so the result displays identically
 /// everywhere and matches the PNG rendering.
@@ -56,3 +79,5 @@ pub fn render_svg(project: &Project) -> String {
     let fonts = font::FontSet::load();
     draw::draw_project_svg(project, &fonts)
 }
+
+pub use write::{save, save_str};

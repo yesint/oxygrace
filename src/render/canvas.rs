@@ -18,6 +18,7 @@ use crate::color::{self, Rgba};
 use crate::font::FontSet;
 use crate::model::Project;
 use crate::patterns::PATTERN_BITS;
+use crate::render::record::{Bounds, ElementId, RecordShape, Recorder, RenderInfo};
 use crate::render::svg::SvgBackend;
 use crate::render::transform::PageTransform;
 use crate::text;
@@ -198,6 +199,9 @@ pub struct Canvas<'a> {
     page: PageTransform,
     project: &'a Project,
     fonts: &'a FontSet,
+    /// Optional hit-test recorder (see [`crate::render::record`]). A pure
+    /// observer: drawing output is identical whether it is on or off.
+    recorder: Option<Recorder>,
 }
 
 impl<'a> Canvas<'a> {
@@ -208,6 +212,16 @@ impl<'a> Canvas<'a> {
             page: PageTransform::new(project.page_width, project.page_height),
             project,
             fonts,
+            recorder: None,
+        }
+    }
+
+    /// Create a raster canvas that also records element geometry for
+    /// hit-testing; finish with [`Canvas::into_pixmap`].
+    pub fn new_recording(project: &'a Project, fonts: &'a FontSet) -> Self {
+        Canvas {
+            recorder: Some(Recorder::default()),
+            ..Canvas::new(project, fonts)
         }
     }
 
@@ -218,6 +232,70 @@ impl<'a> Canvas<'a> {
             page: PageTransform::new(project.page_width, project.page_height),
             project,
             fonts,
+            recorder: None,
+        }
+    }
+
+    /// Open an element: subsequent primitives are recorded under `id` (the
+    /// innermost open element wins). No-op without a recorder.
+    pub fn push_element(&mut self, id: ElementId) {
+        if let Some(r) = &mut self.recorder {
+            r.push(id);
+        }
+    }
+
+    /// Close the innermost open element.
+    pub fn pop_element(&mut self) {
+        if let Some(r) = &mut self.recorder {
+            r.pop();
+        }
+    }
+
+    /// Suspend hit-test recording for pure decoration (e.g. grid lines,
+    /// which span the whole plot and must not steal hovers/clicks).
+    /// Pair with [`Canvas::unmute_recording`].
+    pub fn mute_recording(&mut self) {
+        if let Some(r) = &mut self.recorder {
+            r.mute();
+        }
+    }
+
+    pub fn unmute_recording(&mut self) {
+        if let Some(r) = &mut self.recorder {
+            r.unmute();
+        }
+    }
+
+    /// Record an explicit clickable region (view coords) for the current
+    /// element without drawing anything — e.g. the graph viewport as the
+    /// click-on-empty-plot fallback, or the legend's overall box. Regions
+    /// always lose hit-test priority to drawn ink.
+    pub fn record_rect_view(&mut self, xmin: f64, ymin: f64, xmax: f64, ymax: f64) {
+        if let Some(r) = &mut self.recorder {
+            let (x0, y0) = self.page.view_to_device(xmin, ymax);
+            let (x1, y1) = self.page.view_to_device(xmax, ymin);
+            r.record_region(RecordShape::Rect(Bounds { x0, y0, x1, y1 }));
+        }
+    }
+
+    fn record(&mut self, shape: RecordShape) {
+        if let Some(r) = &mut self.recorder {
+            r.record(shape);
+        }
+    }
+
+    /// Record a clickable polyline (view coords) for the current element
+    /// without drawing anything — e.g. the frame edges doubling as axis
+    /// lines. Unlike [`Canvas::record_rect_view`] this records *ink*, so it
+    /// keeps normal hit-test priority.
+    pub fn record_polyline_view(&mut self, pts: &[VPoint], linewidth: f64) {
+        if self.recorder.is_some() {
+            let dev: Vec<(f32, f32)> = pts
+                .iter()
+                .map(|p| self.page.view_to_device(p.x, p.y))
+                .collect();
+            let half_width = (self.page.linewidth_px(linewidth) / 2.0).max(0.5);
+            self.record(RecordShape::Polyline { pts: dev, half_width });
         }
     }
 
@@ -233,11 +311,17 @@ impl<'a> Canvas<'a> {
             .page
             .view_to_device(xmax + VP_EPSILON, ymin - VP_EPSILON);
         self.backend.set_clip(x0, y0, x1, y1);
+        if let Some(r) = &mut self.recorder {
+            r.set_clip(x0, y0, x1, y1);
+        }
     }
 
     /// Disable clipping (Grace `setclipping(FALSE)`).
     pub fn clear_clip(&mut self) {
         self.backend.clear_clip();
+        if let Some(r) = &mut self.recorder {
+            r.clear_clip();
+        }
     }
 
     /// Access the page transform (for size conversions in the draw layer).
@@ -261,6 +345,18 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Finish a raster canvas: the raw premultiplied-RGBA pixmap plus the
+    /// recorded element geometry (empty without recording).
+    pub fn into_pixmap(self) -> (Pixmap, RenderInfo) {
+        match self.backend {
+            Backend::Raster(b) => (
+                b.pixmap,
+                self.recorder.map(Recorder::finish).unwrap_or_default(),
+            ),
+            Backend::Svg(_) => panic!("into_pixmap called on an SVG canvas"),
+        }
+    }
+
     /// Resolve a fill (color index + Grace pattern index) for the backend.
     /// Pattern 0 means "no fill" and is handled by the callers.
     fn fill_paint(&self, color: i32, pattern: i32) -> FillPaint {
@@ -281,9 +377,21 @@ impl<'a> Canvas<'a> {
         if pts.len() < 2 || linestyle == 0 {
             return;
         }
+        let mut dev: Vec<(f32, f32)> = pts
+            .iter()
+            .map(|p| self.page.view_to_device(p.x, p.y))
+            .collect();
+        // Pathologically dense solid polylines (≫ points per pixel column)
+        // are reduced with M4 aggregation — first/min/max/last per device
+        // x-column — which draws the same per-column envelope a thin stroke
+        // would. Applied to the shared device geometry, so raster, SVG and
+        // hit-recording stay consistent. Dashed lines are exempt (their
+        // pattern phase depends on true path length).
+        if dev.len() > DENSE_POLYLINE_LIMIT && linestyle == 1 {
+            dev = m4_decimate(&dev);
+        }
         let mut pb = PathBuilder::new();
-        for (i, p) in pts.iter().enumerate() {
-            let (x, y) = self.page.view_to_device(p.x, p.y);
+        for (i, &(x, y)) in dev.iter().enumerate() {
             if i == 0 {
                 pb.move_to(x, y);
             } else {
@@ -295,6 +403,9 @@ impl<'a> Canvas<'a> {
         let dash = dash_pattern(linestyle, width);
         let rgba = color::resolve(self.project, color);
         self.backend.stroke_path(&path, rgba, width, dash.as_deref());
+        if self.recorder.is_some() {
+            self.record(RecordShape::Polyline { pts: dev, half_width: width / 2.0 });
+        }
     }
 
     /// Fill a closed polygon (view coords) with a color index and fill pattern.
@@ -309,9 +420,12 @@ impl<'a> Canvas<'a> {
         if pts.len() < 3 || pattern == 0 {
             return;
         }
+        let dev: Vec<(f32, f32)> = pts
+            .iter()
+            .map(|p| self.page.view_to_device(p.x, p.y))
+            .collect();
         let mut pb = PathBuilder::new();
-        for (i, p) in pts.iter().enumerate() {
-            let (x, y) = self.page.view_to_device(p.x, p.y);
+        for (i, &(x, y)) in dev.iter().enumerate() {
             if i == 0 {
                 pb.move_to(x, y);
             } else {
@@ -320,6 +434,9 @@ impl<'a> Canvas<'a> {
         }
         pb.close();
         let Some(path) = pb.finish() else { return };
+        if self.recorder.is_some() {
+            self.record(RecordShape::Polygon(dev));
+        }
         let rule = if rule == 1 {
             FillRule::EvenOdd
         } else {
@@ -383,6 +500,12 @@ impl<'a> Canvas<'a> {
             return;
         };
         self.fill_path_pen(&path, color, pattern);
+        self.record(RecordShape::Rect(Bounds {
+            x0: cx - r,
+            y0: cy - r,
+            x1: cx + r,
+            y1: cy + r,
+        }));
     }
 
     /// Stroke a circle outline (center + radius in view units).
@@ -402,6 +525,12 @@ impl<'a> Canvas<'a> {
         let dash = dash_pattern(ls, width);
         let rgba = color::resolve(self.project, color);
         self.backend.stroke_path(&path, rgba, width, dash.as_deref());
+        self.record(RecordShape::Rect(Bounds {
+            x0: cx - r,
+            y0: cy - r,
+            x1: cx + r,
+            y1: cy + r,
+        }));
     }
 
     /// Build the oval path inscribed in a view-coordinate rectangle.
@@ -412,10 +541,24 @@ impl<'a> Canvas<'a> {
         PathBuilder::from_oval(rect)
     }
 
+    /// Bounds of a path as recorded for hit-testing.
+    fn record_path_bounds(&mut self, path: &Path) {
+        if self.recorder.is_some() {
+            let b = path.bounds();
+            self.record(RecordShape::Rect(Bounds {
+                x0: b.left(),
+                y0: b.top(),
+                x1: b.right(),
+                y1: b.bottom(),
+            }));
+        }
+    }
+
     /// Fill the ellipse inscribed in the rectangle spanned by two view points.
     pub fn fill_ellipse(&mut self, p1: VPoint, p2: VPoint, color: i32, pattern: i32) {
         let Some(path) = self.oval_path(p1, p2) else { return };
         self.fill_path_pen(&path, color, pattern);
+        self.record_path_bounds(&path);
     }
 
     /// Stroke the ellipse inscribed in the rectangle spanned by two view points.
@@ -428,6 +571,7 @@ impl<'a> Canvas<'a> {
         let dash = dash_pattern(ls, width);
         let rgba = color::resolve(self.project, color);
         self.backend.stroke_path(&path, rgba, width, dash.as_deref());
+        self.record_path_bounds(&path);
     }
 
     /// Draw a marked-up string anchored at a view point.
@@ -502,10 +646,21 @@ impl<'a> Canvas<'a> {
             (bx0 + hfudge * (bx1 - bx0), by0 + vfudge * (by1 - by0))
         };
 
+        // Hit-test record: the whole string's rotated bbox in device pixels
+        // (one rect per string, not per glyph).
+        if self.recorder.is_some() {
+            self.record(RecordShape::Rect(Bounds {
+                x0: ax + em_px * (bx0 - fx),
+                y0: ay - em_px * (by1 - fy),
+                x1: ax + em_px * (bx1 - fx),
+                y1: ay - em_px * (by0 - fy),
+            }));
+        }
+
         let default_color = color::resolve(self.project, color);
         for g in &layout.glyphs {
             let outline = self.fonts.outline_char(g.font, g.ch);
-            let Some(path) = outline.path else { continue };
+            let Some(path) = &outline.path else { continue };
             // Map glyph outline (em, Y up): apply the run's text matrix,
             // place at the pen, rotate the whole string, then translate so
             // the fudge point sits at the device anchor (Y down). Composite
@@ -521,7 +676,9 @@ impl<'a> Canvas<'a> {
                 tx,
                 ty,
             );
-            let Some(tpath) = path.transform(ts) else {
+            // `transform` consumes the path, so clone the cached outline —
+            // a plain buffer copy, far cheaper than re-outlining the glyph.
+            let Some(tpath) = path.clone().transform(ts) else {
                 continue;
             };
             let col = match g.color {
@@ -558,6 +715,41 @@ impl<'a> Canvas<'a> {
                 .fill_path(&path, &FillPaint::Solid(col), FillRule::Winding);
         }
     }
+}
+
+/// Polylines beyond this many device points get M4-decimated (solid style
+/// only). Far above any normal plot; only data-dump-sized sets qualify.
+const DENSE_POLYLINE_LIMIT: usize = 4096;
+
+/// M4 aggregation (Jugel et al.): per device x-pixel column keep the first,
+/// lowest, highest and last point, in index order. For a ~1px stroke this
+/// reproduces the same column envelope as drawing every segment.
+fn m4_decimate(pts: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let mut out: Vec<(f32, f32)> = Vec::new();
+    let mut i = 0;
+    while i < pts.len() {
+        let col = pts[i].0.floor();
+        let (mut min_i, mut max_i) = (i, i);
+        let mut j = i;
+        while j < pts.len() && pts[j].0.floor() == col {
+            if pts[j].1 < pts[min_i].1 {
+                min_i = j;
+            }
+            if pts[j].1 > pts[max_i].1 {
+                max_i = j;
+            }
+            j += 1;
+        }
+        let last = j - 1;
+        let (a, b) = (min_i.min(max_i), min_i.max(max_i));
+        for idx in [i, a, b, last] {
+            if out.last() != Some(&pts[idx]) {
+                out.push(pts[idx]);
+            }
+        }
+        i = j;
+    }
+    out
 }
 
 /// Dash pattern (in px) for a Grace line style index, or `None` for solid.

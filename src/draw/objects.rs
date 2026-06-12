@@ -8,7 +8,7 @@
 //! draw order within a pass is boxes, ellipses, lines, strings.
 
 use crate::model::{BoxObj, Graph, LineObj, Project, StringObj};
-use crate::render::{Canvas, HAlign, VAlign, VPoint, WorldTransform};
+use crate::render::{Canvas, ElementId, HAlign, VAlign, VPoint, WorldTransform};
 
 /// Which pass we are drawing: a graph pass or the final page pass.
 #[derive(Clone, Copy)]
@@ -37,24 +37,32 @@ pub fn draw_objects(canvas: &mut Canvas, project: &Project, pass: Pass) {
         }
     };
 
-    for b in &project.boxes {
+    for (i, b) in project.boxes.iter().enumerate() {
         if b.active {
+            canvas.push_element(ElementId::BoxObj(i));
             draw_box(canvas, b, &to_view);
+            canvas.pop_element();
         }
     }
-    for e in &project.ellipses {
+    for (i, e) in project.ellipses.iter().enumerate() {
         if e.active {
+            canvas.push_element(ElementId::EllipseObj(i));
             draw_ellipse(canvas, e, &to_view);
+            canvas.pop_element();
         }
     }
-    for l in &project.lines {
+    for (i, l) in project.lines.iter().enumerate() {
         if l.active {
+            canvas.push_element(ElementId::LineObj(i));
             draw_line(canvas, l, &to_view);
+            canvas.pop_element();
         }
     }
-    for s in &project.strings {
+    for (i, s) in project.strings.iter().enumerate() {
         if s.active {
+            canvas.push_element(ElementId::StringObj(i));
             draw_string(canvas, s, &to_view);
+            canvas.pop_element();
         }
     }
 }
@@ -184,6 +192,7 @@ pub fn draw_timestamp(canvas: &mut Canvas, project: &Project) {
     if !t.active || t.text.is_empty() {
         return;
     }
+    canvas.push_element(ElementId::Timestamp);
     canvas.draw_text(
         VPoint { x: t.x, y: t.y },
         &t.text,
@@ -194,6 +203,7 @@ pub fn draw_timestamp(canvas: &mut Canvas, project: &Project) {
         VAlign::Baseline,
         t.rot,
     );
+    canvas.pop_element();
 }
 
 fn draw_string(

@@ -5,6 +5,9 @@
 //! space (font units divided by units-per-em, Y pointing up), so callers can
 //! scale and position them freely.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use ttf_parser::Face;
 
 /// Number of Grace font slots (0..=13).
@@ -34,6 +37,11 @@ static FONT_DATA: [&[u8]; NUM_FONTS] = [
 /// Holds parsed faces for all font slots for the lifetime of a render.
 pub struct FontSet {
     faces: Vec<Face<'static>>,
+    /// Memoized glyph outlines, keyed by (face slot, char). Outlines are in
+    /// size-independent em units, so the key needs no size. `Mutex` (rather
+    /// than `RefCell`) keeps the set `Sync`; contention is irrelevant — the
+    /// lock cost is dwarfed by CFF charstring interpretation on a miss.
+    glyph_cache: Mutex<HashMap<(i32, char), Arc<GlyphOutline>>>,
 }
 
 impl FontSet {
@@ -44,7 +52,10 @@ impl FontSet {
             .iter()
             .map(|data| Face::parse(data, 0).expect("bundled font must parse"))
             .collect();
-        FontSet { faces }
+        FontSet {
+            faces,
+            glyph_cache: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Borrow the face for a slot, clamping out-of-range indices to slot 0.
@@ -78,6 +89,25 @@ pub const FONT_MAP_DEFAULT: FontMap = [0, 2, 1, 3, 4, 6, 5, 7, 8, 10, 9, 11, 12,
 /// order, bold before italic, Symbol/Dingbats at 8/9. Slots 10..13 were
 /// undefined; they keep identity as a best effort.
 pub const FONT_MAP_ACEGR: FontMap = [0, 1, 2, 3, 4, 5, 6, 7, 12, 13, 10, 11, 12, 13];
+
+/// PostScript name of each embedded face, by face index — the inverse of
+/// [`face_by_name`], used by the `.agr` writer's `@map font` lines.
+pub const FACE_NAMES: [&str; NUM_FONTS] = [
+    "Times-Roman",
+    "Times-Bold",
+    "Times-Italic",
+    "Times-BoldItalic",
+    "Helvetica",
+    "Helvetica-Bold",
+    "Helvetica-Oblique",
+    "Helvetica-BoldOblique",
+    "Courier",
+    "Courier-Bold",
+    "Courier-Oblique",
+    "Courier-BoldOblique",
+    "Symbol",
+    "ZapfDingbats",
+];
 
 /// Resolve a PostScript font name (from `@map font`) to an embedded face.
 pub fn face_by_name(name: &str) -> Option<i32> {
@@ -154,9 +184,25 @@ impl ttf_parser::OutlineBuilder for OutlineBuilder {
 }
 
 impl FontSet {
-    /// Outline a single character in the given font slot, in em units.
-    /// Returns a zero-advance empty glyph if the character is missing.
-    pub fn outline_char(&self, slot: i32, ch: char) -> GlyphOutline {
+    /// Outline a single character in the given font slot, in em units,
+    /// memoized for the lifetime of the set. Returns a zero-advance empty
+    /// glyph if the character is missing.
+    pub fn outline_char(&self, slot: i32, ch: char) -> Arc<GlyphOutline> {
+        // Clamp like `face()` so all out-of-range slots share one cache entry.
+        let slot = if (0..NUM_FONTS as i32).contains(&slot) { slot } else { 0 };
+        if let Some(hit) = self.glyph_cache.lock().unwrap().get(&(slot, ch)) {
+            return Arc::clone(hit);
+        }
+        let outline = Arc::new(self.build_outline(slot, ch));
+        self.glyph_cache
+            .lock()
+            .unwrap()
+            .insert((slot, ch), Arc::clone(&outline));
+        outline
+    }
+
+    /// Build a glyph outline uncached (the cache-miss path).
+    fn build_outline(&self, slot: i32, ch: char) -> GlyphOutline {
         let face = self.face(slot);
         let upem = face.units_per_em() as f32;
         let scale = 1.0 / upem;

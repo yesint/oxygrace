@@ -6,7 +6,7 @@
 //! tick-label formats are deferred.
 
 use crate::model::{Axis, AxisId, Graph, ScaleType, TickFormat};
-use crate::render::{Canvas, HAlign, VAlign, VPoint, WorldTransform};
+use crate::render::{Canvas, ElementId, HAlign, VAlign, VPoint, WorldTransform};
 
 /// View-units length of a unit-size tick (Grace's `0.02 * size`).
 const TICK_UNIT: f64 = 0.02;
@@ -18,16 +18,16 @@ const TL_OFFSET: f64 = 0.01;
 const MAX_TICKS: usize = 256;
 
 /// Draw all active axes of a graph.
-pub fn draw_axes(canvas: &mut Canvas, graph: &Graph) {
+pub fn draw_axes(canvas: &mut Canvas, gno: usize, graph: &Graph) {
     let wt = WorldTransform::new(graph);
     if graph.graph_type == crate::model::GraphType::Polar {
-        draw_polar_axes(canvas, graph, &wt);
+        draw_polar_axes(canvas, gno, graph, &wt);
         return;
     }
     for id in [AxisId::X, AxisId::Y, AxisId::AltX, AxisId::AltY] {
         let axis = &graph.axes[id.index()];
         if axis.active {
-            draw_one_axis(canvas, graph, &wt, id, axis);
+            draw_one_axis(canvas, gno, graph, &wt, id, axis);
         }
     }
 }
@@ -51,7 +51,7 @@ fn polar_arc(wt: &WorldTransform, rho: f64, phi1: f64, phi2: f64) -> Vec<VPoint>
 /// line at the start angle. Grid lines: rho ticks make arcs across the phi
 /// range, phi ticks make radial lines. Polar tick labels are not drawn
 /// (mirrors what gracebat shows for polar.agr).
-fn draw_polar_axes(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform) {
+fn draw_polar_axes(canvas: &mut Canvas, gno: usize, graph: &Graph, wt: &WorldTransform) {
     let w = &graph.world;
 
     for id in [AxisId::X, AxisId::Y] {
@@ -59,6 +59,7 @@ fn draw_polar_axes(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform) {
         if !axis.active {
             continue;
         }
+        canvas.push_element(ElementId::AxisBar { graph: gno, axis: id.index() });
         let is_x = id.is_x();
         // Axis bars (grids are drawn in the separate pre-data pass).
         if axis.draw_bar {
@@ -84,6 +85,7 @@ fn draw_polar_axes(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform) {
                 );
             }
         }
+        canvas.pop_element();
     }
 }
 
@@ -134,7 +136,7 @@ fn axis_ticks(graph: &Graph, is_x: bool, axis: &Axis) -> (Vec<f64>, Vec<f64>) {
 /// Draw the grid lines of every active axis. Grace draws grids right after
 /// the frame fill and **before** the data (plotone.cpp: drawgrid), so fills
 /// and sets cover them.
-pub fn draw_grid(canvas: &mut Canvas, graph: &Graph) {
+pub fn draw_grid(canvas: &mut Canvas, _gno: usize, graph: &Graph) {
     let wt = WorldTransform::new(graph);
     let polar = graph.graph_type == crate::model::GraphType::Polar;
     let w = &graph.world;
@@ -143,6 +145,9 @@ pub fn draw_grid(canvas: &mut Canvas, graph: &Graph) {
         if !axis.active {
             continue;
         }
+        // Grid lines are decoration: they span the whole plot and must not
+        // steal hovers/clicks from the elements (or the plot area) below.
+        canvas.mute_recording();
         let is_x = id.is_x();
         let (majors, minors) = axis_ticks(graph, is_x, axis);
         for (list, props) in [(&minors, &axis.minor_props), (&majors, &axis.major_props)] {
@@ -169,10 +174,18 @@ pub fn draw_grid(canvas: &mut Canvas, graph: &Graph) {
                 }
             }
         }
+        canvas.unmute_recording();
     }
 }
 
-fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: AxisId, axis: &Axis) {
+fn draw_one_axis(
+    canvas: &mut Canvas,
+    gno: usize,
+    graph: &Graph,
+    wt: &WorldTransform,
+    id: AxisId,
+    axis: &Axis,
+) {
     let is_x = id.is_x();
     let (majors, minors) = axis_ticks(graph, is_x, axis);
 
@@ -228,6 +241,7 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
     let on_opposite = axis.op != 0;
 
     // Axis bar on the chosen side(s) (t_drawbar / t_op).
+    canvas.push_element(ElementId::AxisBar { graph: gno, axis: id.index() });
     if axis.draw_bar {
         if on_normal {
             canvas.draw_polyline(
@@ -268,6 +282,7 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
             }
         }
     }
+    canvas.pop_element();
 
     // Tick label baselines per side (drawticks.cpp vbase_tlabel1/2).
     let tsize = TICK_UNIT * axis.major_props.size;
@@ -302,6 +317,7 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
     // (itcur % (tl_staggered + 1)) with tlsize = 0.02 * tl_charsize).
     let stagger_step = TL_OFFSET + TICK_UNIT * axis.tl_charsize;
     if axis.ticklabels {
+        canvas.push_element(ElementId::TickLabels { graph: gno, axis: id.index() });
         for (itcur, &t) in labeled.iter().enumerate() {
             let a = along_of(t);
             let text = tick_label_text(axis, t);
@@ -325,11 +341,13 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
                 canvas.draw_text(pt(a, tl2 + shift), &text, axis.tl_charsize, axis.tl_font, axis.tl_color, ha, va, axis.tl_angle as f64);
             }
         }
+        canvas.pop_element();
     }
 
     // Axis label: tl_offset beyond the side's bounding box of tick marks and
     // tick labels (vp_label_offset = (vbase - bb_edge) + tl_offset).
     if !axis.label.is_empty() {
+        canvas.push_element(ElementId::AxisLabel { graph: gno, axis: id.index() });
         // Outward tick extents beyond each base (mirror of the tick switch).
         let tick_ext = match axis.tick_inout {
             0 => (1.0 - sign) / 2.0 * tsize,
@@ -377,6 +395,7 @@ fn draw_one_axis(canvas: &mut Canvas, graph: &Graph, wt: &WorldTransform, id: Ax
             let angle = label_angle(is_x, axis);
             canvas.draw_text(anchor, &axis.label, axis.label_charsize, axis.label_font, axis.label_color, ha, va, angle);
         }
+        canvas.pop_element();
     }
 }
 

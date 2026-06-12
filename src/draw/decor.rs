@@ -4,10 +4,10 @@
 use crate::draw::sets;
 use crate::model::{Graph, LineType, SetType};
 use crate::render::transform::WorldTransform;
-use crate::render::{Canvas, HAlign, VAlign, VPoint};
+use crate::render::{Canvas, ElementId, HAlign, VAlign, VPoint};
 
 /// Draw the legend if active and there is at least one labelled set.
-pub fn draw_legend(canvas: &mut Canvas, graph: &Graph) {
+pub fn draw_legend(canvas: &mut Canvas, gno: usize, graph: &Graph) {
     let l = &graph.legend;
     if !l.active {
         return;
@@ -46,6 +46,13 @@ pub fn draw_legend(canvas: &mut Canvas, graph: &Graph) {
         .iter()
         .map(|s| canvas.text_width_view(&s.legend, l.charsize, l.font))
         .fold(0.0, f64::max);
+
+    canvas.push_element(ElementId::Legend(gno));
+    // The whole legend area is one clickable region, box or no box.
+    {
+        let content_h = entries.len() as f64 * em + (entries.len().saturating_sub(1)) as f64 * yskip;
+        canvas.record_rect_view(ax, ay - content_h, text_x + max_text, ay);
+    }
 
     // Box around the legend (filled then outlined), drawn first. Grace sizes
     // the box to enclose the actual content; with a short swatch line the
@@ -122,6 +129,7 @@ pub fn draw_legend(canvas: &mut Canvas, graph: &Graph) {
 
         y_cur -= row;
     }
+    canvas.pop_element();
 }
 
 /// Draw a bar set's legend swatch (Grace `drawlegbarsym`): a rectangle

@@ -52,13 +52,38 @@ fn tick_label_formatting() {
 }
 
 #[test]
+fn view_to_world_round_trips() {
+    use oxygrace::model::{Graph, ScaleType, World};
+    use oxygrace::render::WorldTransform;
+    for (xscale, yscale, xinvert, world) in [
+        (ScaleType::Normal, ScaleType::Normal, false, World { xmin: -3.0, xmax: 7.0, ymin: 0.5, ymax: 9.5 }),
+        (ScaleType::Logarithmic, ScaleType::Logarithmic, false, World { xmin: 0.1, xmax: 1000.0, ymin: 1.0, ymax: 100.0 }),
+        (ScaleType::Normal, ScaleType::Logit, true, World { xmin: 0.0, xmax: 10.0, ymin: 0.05, ymax: 0.95 }),
+    ] {
+        let graph = Graph { xscale, yscale, xinvert, world, ..Default::default() };
+        let wt = WorldTransform::new(&graph);
+        for i in 1..10 {
+            let f = i as f64 / 10.0;
+            let wx = world.xmin + f * (world.xmax - world.xmin);
+            let wy = world.ymin + f * (world.ymax - world.ymin);
+            let (vx, vy) = wt.world_to_view(wx, wy);
+            let (bx, by) = wt.view_to_world(vx, vy).expect("inverse in domain");
+            assert!((bx - wx).abs() < 1e-9 * (1.0 + wx.abs()), "x round trip: {wx} vs {bx}");
+            assert!((by - wy).abs() < 1e-9 * (1.0 + wy.abs()), "y round trip: {wy} vs {by}");
+        }
+    }
+}
+
+#[test]
 fn world_to_view_linear() {
-    let mut graph = oxygrace::model::Graph::default();
-    graph.world = oxygrace::model::World {
-        xmin: 0.0,
-        xmax: 10.0,
-        ymin: 0.0,
-        ymax: 100.0,
+    let mut graph = oxygrace::model::Graph {
+        world: oxygrace::model::World {
+            xmin: 0.0,
+            xmax: 10.0,
+            ymin: 0.0,
+            ymax: 100.0,
+        },
+        ..Default::default()
     };
     graph.view = oxygrace::model::View {
         xmin: 0.2,

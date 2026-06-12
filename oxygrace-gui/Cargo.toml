@@ -1,0 +1,16 @@
+[package]
+name = "oxygrace-gui"
+version = "0.1.0"
+edition = "2021"
+description = "Interactive GUI editor for Grace (.agr) plot files, built on the oxygrace renderer"
+license = "MIT"
+
+[dependencies]
+oxygrace = { path = ".." }
+eframe = "0.34"
+egui = "0.34"
+egui_extras = "0.34"
+rfd = "0.15"
+tiny-skia = "0.11"
+log = "0.4"
+env_logger = "0.11"

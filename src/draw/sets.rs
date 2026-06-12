@@ -2,7 +2,7 @@
 //! symbols, fills and error bars are added in later milestones.
 
 use crate::model::{FillType, GraphType, Graph, LineType, Set, SetType, SymbolType};
-use crate::render::{Canvas, VPoint, WorldTransform};
+use crate::render::{Canvas, ElementId, VPoint, WorldTransform};
 
 /// True for bar dataset types.
 fn is_bar(t: SetType) -> bool {
@@ -20,7 +20,7 @@ const SQRT1_2: f64 = std::f64::consts::FRAC_1_SQRT_2;
 /// are drawn with clipping to the graph viewport (`setclipping(TRUE)`), while
 /// symbols are drawn unclipped (`drawsetsyms` calls `setclipping(FALSE)`) but
 /// skip data points outside the world window (`is_validWPoint`).
-pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
+pub fn draw_sets(canvas: &mut Canvas, gno: usize, graph: &Graph) {
     let wt = WorldTransform::new(graph);
     let v = graph.view;
     let chart_layout = chart_layout_map(graph);
@@ -33,10 +33,11 @@ pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
     };
     canvas.set_clip_view(v.xmin, v.ymin, v.xmax, v.ymax);
 
-    for set in &graph.sets {
+    for (si, set) in graph.sets.iter().enumerate() {
         if set.hidden {
             continue;
         }
+        canvas.push_element(ElementId::Set { graph: gno, set: si });
         // Chart graphs offset every drawable set sideways (the bar-group
         // spacing accumulates over all sets in plotone's GRAPH_CHART loop);
         // stacked charts shift every element by the running category totals
@@ -96,13 +97,15 @@ pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
             }
             canvas.set_clip_view(v.xmin, v.ymin, v.xmax, v.ymax);
         }
+        canvas.pop_element();
     }
 
     if stacked {
-        for set in &graph.sets {
+        for (si, set) in graph.sets.iter().enumerate() {
             if set.hidden {
                 continue;
             }
+            canvas.push_element(ElementId::Set { graph: gno, set: si });
             let (off, refy) = layout_of(set);
             draw_set_errbars(canvas, &wt, graph, set, off, refy);
             canvas.clear_clip();
@@ -113,6 +116,7 @@ pub fn draw_sets(canvas: &mut Canvas, graph: &Graph) {
                 draw_avalues(canvas, &wt, set, off, refy);
             }
             canvas.set_clip_view(v.xmin, v.ymin, v.xmax, v.ymax);
+            canvas.pop_element();
         }
     }
     canvas.clear_clip();
@@ -759,6 +763,19 @@ fn draw_set_symbols(
     let do_fill = set.symbol_fill.pattern != 0;
     let do_outline = set.symbol_linestyle != 0;
 
+    // Pathologically dense uniform symbol clouds: two identical symbols
+    // closer than half their radius are visually idempotent, so above the
+    // threshold skip symbols whose center lands in an already-stamped cell
+    // of that size (≥ half a pixel). Per-point size/color sets are exempt
+    // (their symbols differ), as are character symbols.
+    let dense_dedup = n > DENSE_SYMBOL_LIMIT
+        && zsize.is_none()
+        && zcolor.is_none()
+        && set.symbol != SymbolType::Char;
+    let side = canvas.page().side;
+    let cell_view = (0.01 * set.symbol_size / 2.0).max(0.5 / side);
+    let mut stamped: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+
     let skip = set.symskip.max(0) as usize + 1;
     for i in (0..n).step_by(skip) {
         let y = ys[i] + refy.and_then(|r| r.get(i)).copied().unwrap_or(0.0);
@@ -784,10 +801,23 @@ fn draw_set_symbols(
             Some(z) => z.get(i).copied().unwrap_or(0.0).round() as i32,
             None => set.symbol_fill.color,
         };
+        if dense_dedup {
+            let cell = (
+                (vx / cell_view).round() as i32,
+                (vy / cell_view).round() as i32,
+            );
+            if !stamped.insert(cell) {
+                continue;
+            }
+        }
         let c = VPoint { x: vx, y: vy };
         draw_one_symbol(canvas, set, c, r, do_fill, do_outline, fill_color);
     }
 }
+
+/// Symbol count above which dense uniform clouds are deduplicated by
+/// half-radius cells.
+const DENSE_SYMBOL_LIMIT: usize = 4096;
 
 /// Draw a set's symbol centered at a view point (used by the legend swatch).
 pub fn draw_symbol_at(canvas: &mut Canvas, set: &Set, c: VPoint) {

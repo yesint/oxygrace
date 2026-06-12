@@ -61,6 +61,11 @@ impl PageTransform {
     pub fn view_len_px(&self, len: f64) -> f32 {
         (len * self.side) as f32
     }
+
+    /// Device pixel to view point (inverse of [`PageTransform::view_to_device`]).
+    pub fn device_to_view(&self, px: f32, py: f32) -> (f64, f64) {
+        (px as f64 / self.side, (self.height - py as f64) / self.side)
+    }
 }
 
 /// Apply a single-axis scale transform (world value -> monotonic coordinate).
@@ -91,6 +96,23 @@ fn scale_fwd(scale: ScaleType, v: f64) -> Option<f64> {
                 None
             }
         }
+    }
+}
+
+/// Inverse of [`scale_fwd`] (scaled coordinate -> world value).
+fn scale_inv(scale: ScaleType, s: f64) -> Option<f64> {
+    match scale {
+        ScaleType::Normal => Some(s),
+        ScaleType::Logarithmic => Some(10f64.powf(s)),
+        ScaleType::Reciprocal => {
+            if s != 0.0 {
+                Some(1.0 / s)
+            } else {
+                None
+            }
+        }
+        // Inverse of ln(v / (1 - v)) — the logistic function.
+        ScaleType::Logit => Some(1.0 / (1.0 + (-s).exp())),
     }
 }
 
@@ -228,6 +250,55 @@ impl WorldTransform {
             fx = 1.0 - fx;
         }
         self.vx0 + fx * (self.vx1 - self.vx0)
+    }
+
+    /// View X coordinate back to the world X value (inverse of
+    /// [`WorldTransform::x_to_view`]; `None` when out of the scale's domain).
+    pub fn view_to_x(&self, vx: f64) -> Option<f64> {
+        let sx = if self.fixed {
+            let med = (self.vx0 + self.vx1) / 2.0;
+            let wmed = (self.sx0 + self.sx1) / 2.0;
+            let rc = if self.xinvert { -self.fixed_rate() } else { self.fixed_rate() };
+            wmed + (vx - med) / rc
+        } else {
+            let mut fx = (vx - self.vx0) / (self.vx1 - self.vx0);
+            if self.xinvert {
+                fx = 1.0 - fx;
+            }
+            self.sx0 + fx * (self.sx1 - self.sx0)
+        };
+        scale_inv(self.xscale, sx)
+    }
+
+    /// View Y coordinate back to the world Y value (inverse of
+    /// [`WorldTransform::y_to_view`]).
+    pub fn view_to_y(&self, vy: f64) -> Option<f64> {
+        let sy = if self.fixed {
+            let med = (self.vy0 + self.vy1) / 2.0;
+            let wmed = (self.sy0 + self.sy1) / 2.0;
+            let rc = if self.yinvert { -self.fixed_rate() } else { self.fixed_rate() };
+            wmed + (vy - med) / rc
+        } else {
+            let mut fy = (vy - self.vy0) / (self.vy1 - self.vy0);
+            if self.yinvert {
+                fy = 1.0 - fy;
+            }
+            self.sy0 + fy * (self.sy1 - self.sy0)
+        };
+        scale_inv(self.yscale, sy)
+    }
+
+    /// View point back to world coordinates (inverse of
+    /// [`WorldTransform::world_to_view`]); polar graphs return (phi, rho).
+    pub fn view_to_world(&self, vx: f64, vy: f64) -> Option<(f64, f64)> {
+        if self.polar {
+            let (cx, cy, rc) = self.polar_params();
+            let (dx, dy) = (vx - cx, vy - cy);
+            let rho = (dx * dx + dy * dy).sqrt() / rc;
+            let sign = if self.xinvert { -1.0 } else { 1.0 };
+            return Some((sign * dy.atan2(dx), rho));
+        }
+        Some((self.view_to_x(vx)?, self.view_to_y(vy)?))
     }
 
     /// Map a world Y value to its view Y coordinate (0 if out of domain,

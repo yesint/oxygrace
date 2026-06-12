@@ -24,3 +24,7 @@ log = "0.4"
 env_logger = "0.11"
 
 [dev-dependencies]
+
+[workspace]
+members = ["oxygrace-gui"]
+resolver = "2"

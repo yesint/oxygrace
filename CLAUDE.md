@@ -4,9 +4,15 @@ Guidance for working in the **oxygrace** repository.
 
 ## Project
 
-Oxygrace is a pure-Rust, headless interpreter and renderer for **Grace**
-(xmgrace) `.agr` project files and `.xvg` data files. It parses a file into an
-in-memory model and rasterizes it to a PNG. No GUI, no editing.
+Oxygrace is a pure-Rust interpreter and renderer for **Grace** (xmgrace)
+`.agr` project files and `.xvg` data files. The core library parses a file
+into an in-memory model, rasterizes it (PNG/pixmap) or emits SVG, and can
+serialize the model back to `.agr` (`save_str`/`save`). A GUI editor
+(**`oxygrace-gui`**, egui/eframe) is being built on top — see
+`docs/gui-analysis.md` for the toolkit decision and architecture, and
+`/home/semen/.claude/plans/polished-coalescing-biscuit.md` for the roadmap
+(G1 viewer done; G2 selection, G3 inspector/undo/save, G4 direct
+manipulation, G5 wasm pending).
 
 The behavioural reference is Grace and the **QtGrace6** C/C++ port at
 `/home/semen/install/QtGrace6`. We reimplement its *semantics*, not its code.
@@ -16,12 +22,17 @@ antialiasing differ.
 
 ## Build / run / test
 
+The repo is a cargo **workspace**: the `oxygrace` library/CLI package lives at
+the root (commands below unchanged), the GUI is the `oxygrace-gui` member.
+
 ```bash
 cargo build                       # build lib + bin
 cargo run -- examples/axes.agr    # render to examples/axes.png
 cargo run -- in.agr -o out.png --width 1466 --height 1076
-cargo test                        # unit + corpus smoke tests
-cargo clippy                      # lint (keep clean)
+cargo test                        # unit + corpus smoke + round-trip tests
+cargo clippy --workspace          # lint (keep clean)
+cargo run -p oxygrace-gui [file]  # the GUI editor
+# GUI self-screenshot (debug/CI): OXYGRACE_GUI_SHOT=/tmp/shot.png cargo run -p oxygrace-gui f.agr
 ```
 
 ## Constraints (do not break these)
@@ -69,18 +80,30 @@ Use the **`<module>.rs` + `<module>/` directory** convention — **never
 ```
 src/
   main.rs            CLI
-  lib.rs             public API: load / load_str / render_png
+  lib.rs             public API: load / load_str / render_png / render_svg /
+                     render_pixmap (RenderResult: pixmap + RenderInfo) /
+                     save_str / save
   model.rs + model/  plot data model (Project→Graph→Set, Axis, Frame, enums, defaults)
   color.rs           default 16-color map + @map color overrides
   font.rs            embedded URW base35 OTFs, glyph outlines via ttf-parser
+                     (memoized: Mutex<HashMap> glyph cache, Arc<GlyphOutline>)
   text.rs            Grace string markup parser + glyph layout
   parse.rs + parse/  grammar.rs (peg), reader.rs (line loop + apply), data.rs (rows)
+  write.rs           .agr writer (inverse of reader's apply; emits @version 50122)
   render.rs + render/ canvas.rs (shared device primitives + raster backend),
-                     svg.rs (SVG backend), transform.rs (coords)
+                     svg.rs (SVG backend), transform.rs (coords),
+                     record.rs (hit-test side-channel: ElementId, RenderInfo —
+                     a pure observer; pixel output identical with it on/off)
   draw.rs + draw/    plot.rs (draw order), axes.rs (ticks/labels), sets.rs (data)
+                     — draw code tags elements via canvas.push/pop_element
 assets/fonts/        bundled URW base35 OTFs (embedded via include_bytes!)
 examples/            *.agr test corpus (from QtGrace6)
-tests/integration.rs grammar + transform unit tests + corpus smoke test
+tests/               integration.rs (grammar/transform/corpus), hittest.rs
+                     (recording purity + hit-test), roundtrip.rs (save_str
+                     stability + render equality over the corpus)
+oxygrace-gui/src/    egui app: app.rs (state + panels), render.rs (dirty →
+                     texture), plot_view.rs (ViewMap fit/blit + click hit-test),
+                     file.rs (rfd dialogs — keep all dialog calls here)
 ```
 
 ## Reference formulas (ported from QtGrace6 — cite the source in code)
@@ -239,6 +262,82 @@ backend enum — raster (tiny-skia) and SVG writer — both fed identical
 device-space geometry, so the SVG matches the PNG pixel-for-pixel
 (validated by rasterizing with Chromium and diffing). Text is emitted
 as glyph outline paths.
+
+**GUI Phase 0 + G1 (done):** cargo workspace; `render_pixmap` (raw
+premultiplied-RGBA + `RenderInfo` hit-test geometry, recorded as a pure
+side-channel on the canvas — guarded by a corpus pixel-equality test);
+`.agr` writer (`save_str`/`save`, validated by save-stability + render-
+equality round-trip tests over the whole corpus and by opening saved files
+in QtGrace); glyph-outline cache (warm full render 2–12 ms in release);
+`oxygrace-gui` viewer — open via rfd, dirty-flag texture loop, zoom-to-fit
+letterboxed canvas, click → hit-test in the status bar, panel skeleton.
+
+**GUI G2 (done):** click/hover selection on the canvas (hit-test + Esc
+clears), selection overlay (bounds box + 8 handles) and hover highlight
+painted on top of the texture (no re-render), project tree in the left
+panel sharing the `ElementId` selection currency (hidden items grayed),
+`tree::describe` for status/inspector text, `OXYGRACE_GUI_SELECT=set:0:1`
+debug hook for screenshot tests, corpus self-consistency test
+(every visible graph/set records bounds). High-contrast theme
+(`theme.rs`: zoom 1.25, bright text, halo-outlined selection overlay) —
+hardcoded for now, to become configurable.
+
+**GUI G3 (done):** the editor MVP. `edit.rs` command layer (widgets queue
+`Edit { label, coalesce, apply: Box<dyn FnOnce(&mut Project)> }`; the app
+applies them after the UI pass — widgets never mutate the model);
+`undo.rs` snapshot stack (limit 50, slider drags / typing coalesce by
+label into one step, Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y, Edit menu shows step
+labels); `inspector/rows.rs` property-row vocabulary (num/int/text/toggle/
+combo/color-with-swatches/font/linestyle-with-dash-preview, all in
+2-column grids) and pages: page, graph (world/viewport/scales/titles),
+axis (bar/ticks/tick-labels/label sections, clicked sub-element opens
+expanded), set (line/symbol/fill/errorbar/avalue), legend, frame, objects
+(string/line/box/ellipse/timestamp); Save / Save As (Ctrl+S, rfd) via the
+core writer, modified flag in the window title, confirm-on-close modal.
+UX refinements: sub-elements (title, tick labels…) share their parent's
+page with the clicked section force-expanded (App.refocus flag); shape-based
+selection highlight via `RenderInfo::shapes_of` (clip-aware); `hit_candidates`
++ same-spot click cycling reaches occluded elements (axis promoted over
+coincident frame; explicit click-regions like the plot area always lose to
+drawn ink; grid lines muted from recording entirely); swatch-grid color &
+pattern pickers; −/+ spin buttons; tree scrolls both ways so panels shrink
+freely; frame merged into the plot-area page.
+
+**GUI G4 (done):** direct manipulation. Core grew the inverse transforms
+(`PageTransform::device_to_view`, `WorldTransform::view_to_x/y/world`, incl.
+polar/fixed/invert — round-trip tested). Canvas drags (plot_view.rs):
+drag-move legend, strings, lines, boxes, ellipses, timestamp (view- or
+world-anchored, converted through the owning graph's transform); drag the
+8 selection handles of a selected plot area to resize the viewport, drag
+inside to move it. Each gesture coalesces into one undo step
+(`App::end_gesture` on release); cursor feedback (grab/resize icons);
+recomputed from press-time originals each frame so there is no drift.
+**GUI G4.5 (done):** xmgrace-style CLI (`args.rs`: project/data files,
+`-xy`, `-nxy`, `-type`, `-free`; core `src/import.rs` `import_data_str` +
+`autoscale_world`); free page aspect (View → Free aspect: page follows the
+canvas AND viewports/view-anchored objects rescale with the page extents —
+the postprocess_version stretch — so the plot fills the window; original
+geometry restored on toggle-off); dark/light modes (View →
+Mode, `theme::apply(ctx, Mode)`); status bar updates on hover (element +
+overlap count); menus switch on hover once one is open; frame edges are
+recorded as axis ink (`record_polyline_view`) so axes are selectable when
+bars are off (au.agr); highlight polylines dedup consecutive points (egui
+tessellator spike artifacts); line annotations get draggable endpoint
+handles; rotatable elements (strings, timestamp) arm rotate mode on second
+click — corner circles, drag rotates around the anchor.
+**Perf (1M-point stress, tests/stress.rs — run with `cargo test --release
+--test stress -- --ignored --nocapture`):** dense solid polylines (>4096
+device points) are M4-decimated per device x-column (first/min/max/last —
+pixel-equivalent for thin strokes; dashed lines exempt) in the shared
+geometry path, and dense uniform symbol clouds (>4096) dedup by
+half-radius cells (per-point size/color and Char symbols exempt). 1M-point
+line: ~1.5 s → 25–50 ms render, hover hit-test µs; 1M symbols: 8.2 s →
+0.3 s, records 2M → 53k. Theme: View → Mode has System/Dark/Light —
+egui's `system_theme()` gives the OS dark/light preference only (no system
+palette colors exist in egui).
+Next: G5 wasm (roadmap in
+`/home/semen/.claude/plans/polished-coalescing-biscuit.md`; toolkit
+analysis in `docs/gui-analysis.md`).
 
 See `/home/semen/.claude/plans/we-will-build-an-wobbly-elephant.md` for the
 original plan.
