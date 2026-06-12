@@ -1,0 +1,47 @@
+# Build the wasm GUI and publish it to GitHub Pages.
+# Pages must be enabled for the repo with "GitHub Actions" as the source
+# (Settings → Pages → Build and deployment → Source).
+name: web-demo
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install trunk
+        uses: jetli/trunk-action@v0.5.0
+      - name: Build
+        working-directory: oxygrace-gui
+        # public-url makes asset paths relative to the Pages subpath.
+        run: trunk build --release --public-url ./
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: oxygrace-gui/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

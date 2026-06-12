@@ -1,0 +1,6 @@
+# Web build of the GUI: `trunk serve --release` (dev) or
+# `trunk build --release` (deployable bundle in dist/).
+# The workspace .cargo/config.toml enables wasm SIMD128.
+[build]
+target = "index.html"
+release = true

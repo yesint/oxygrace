@@ -76,7 +76,7 @@ fn stress_million_points() {
         let shapes: usize = res.info.shapes_of(ElementId::Set { graph: 0, set: 0 }).count();
         println!("  recorded shapes for the set: {shapes}");
         // Dump for visual inspection of the decimation fidelity.
-        let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
             .join(format!("target/stress_{}.png", if symbols { "symbols" } else { "line" }));
         std::fs::write(&out, res.pixmap.encode_png().unwrap()).unwrap();
         println!("  wrote {}", out.display());

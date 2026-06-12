@@ -1,0 +1,5 @@
+# Web builds: tiny-skia ships hand-written wasm SIMD128 paths that are only
+# compiled in when the target feature is enabled (no runtime detection on
+# wasm). Baseline in all browsers since 2021/2023 (Safari 16.4).
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

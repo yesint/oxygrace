@@ -105,7 +105,7 @@ fn world_to_view_linear() {
 
 #[test]
 fn corpus_loads_and_renders() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../examples");
     let mut count = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
@@ -125,7 +125,7 @@ fn corpus_loads_and_renders() {
 /// Every corpus file must also render to a structurally sound SVG document.
 #[test]
 fn corpus_renders_svg() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../examples");
     let mut count = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();

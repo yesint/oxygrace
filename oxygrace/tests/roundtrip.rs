@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 fn corpus() -> Vec<PathBuf> {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())

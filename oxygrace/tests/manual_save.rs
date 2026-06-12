@@ -5,7 +5,8 @@
 #[test]
 #[ignore]
 fn dump_saved_corpus() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let root = root.as_path();
     let out_dir = root.join("target/saved");
     std::fs::create_dir_all(&out_dir).unwrap();
     for entry in std::fs::read_dir(root.join("examples")).unwrap() {

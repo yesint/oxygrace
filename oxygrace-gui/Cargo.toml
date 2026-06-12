@@ -1,16 +1,33 @@
 [package]
 name = "oxygrace-gui"
-version = "0.1.0"
-edition = "2021"
 description = "Interactive GUI editor for Grace (.agr) plot files, built on the oxygrace renderer"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
-oxygrace = { path = ".." }
+oxygrace = { path = "../oxygrace" }
 eframe = "0.34"
 egui = "0.34"
 egui_extras = "0.34"
 rfd = "0.15"
 tiny-skia = "0.11"
 log = "0.4"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = "0.11"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "HtmlAnchorElement",
+    "Blob",
+    "BlobPropertyBag",
+    "Url",
+] }

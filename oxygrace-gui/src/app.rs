@@ -59,11 +59,21 @@ pub struct App {
     title_sent: String,
     /// Frame counter for the `OXYGRACE_GUI_SHOT` self-screenshot mode.
     frames: u32,
+    /// Context handle for async tasks (web file dialogs) to request repaints.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub egui_ctx: egui::Context,
+    /// Asynchronously opened files arrive here as (name, content).
+    #[cfg(target_arch = "wasm32")]
+    pub file_tx: std::sync::mpsc::Sender<(String, String)>,
+    #[cfg(target_arch = "wasm32")]
+    file_rx: std::sync::mpsc::Receiver<(String, String)>,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::theme::apply(&cc.egui_ctx, crate::theme::Mode::Dark);
+        #[cfg(target_arch = "wasm32")]
+        let (file_tx, file_rx) = std::sync::mpsc::channel();
         let mut app = App {
             fonts: FontSet::load(),
             project: None,
@@ -91,22 +101,41 @@ impl App {
             allow_close: false,
             title_sent: String::new(),
             frames: 0,
+            egui_ctx: cc.egui_ctx.clone(),
+            #[cfg(target_arch = "wasm32")]
+            file_tx,
+            #[cfg(target_arch = "wasm32")]
+            file_rx,
         };
-        // Command line: project / data files plus xmgrace-style options.
-        let launch = crate::args::parse(std::env::args().skip(1));
-        if let Some(project) = launch.project {
-            app.project = Some(project);
-            app.path = launch.path;
+        // The web demo starts with a bundled example (there is no command
+        // line or filesystem in the browser).
+        #[cfg(target_arch = "wasm32")]
+        {
+            app.project = Some(oxygrace::load_str(include_str!(
+                "../../examples/log2log.agr"
+            )));
+            app.path = Some(PathBuf::from("log2log.agr"));
             app.dirty = true;
-            app.status = if launch.messages.is_empty() {
-                "Loaded".into()
-            } else {
-                launch.messages.join("; ")
-            };
-        } else if !launch.messages.is_empty() {
-            app.status = launch.messages.join("; ");
+            app.status = "Demo project loaded — File → Open… to load your own".into();
         }
-        app.free_aspect = launch.free_aspect;
+        // Command line: project / data files plus xmgrace-style options.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let launch = crate::args::parse(std::env::args().skip(1));
+            if let Some(project) = launch.project {
+                app.project = Some(project);
+                app.path = launch.path;
+                app.dirty = true;
+                app.status = if launch.messages.is_empty() {
+                    "Loaded".into()
+                } else {
+                    launch.messages.join("; ")
+                };
+            } else if !launch.messages.is_empty() {
+                app.status = launch.messages.join("; ");
+            }
+            app.free_aspect = launch.free_aspect;
+        }
         // Debug/CI hook: pre-select an element (e.g. "set:0:1", "legend:0").
         if let Ok(spec) = std::env::var("OXYGRACE_GUI_SELECT") {
             app.selection = parse_element_spec(&spec);
@@ -423,6 +452,11 @@ impl eframe::App for App {
         if resolved != self.theme {
             self.theme = resolved;
             crate::theme::apply(ctx, resolved);
+        }
+        // Files picked by the async (web) dialog arrive via the inbox.
+        #[cfg(target_arch = "wasm32")]
+        while let Ok((name, content)) = self.file_rx.try_recv() {
+            crate::file::open_loaded(self, name, content);
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::O)) {
             crate::file::open_dialog(self);

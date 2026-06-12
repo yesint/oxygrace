@@ -22,7 +22,7 @@ basedir="$root/target/baseline"
 cmpdir="$root/target/compare"
 mkdir -p "$outdir" "$cmpdir"
 
-cargo build --quiet --manifest-path "$root/Cargo.toml"
+cargo build --quiet -p oxygrace-cli --manifest-path "$root/Cargo.toml"
 bin="$root/target/debug/oxygrace"
 
 names=("$@")

@@ -5,14 +5,13 @@ Guidance for working in the **oxygrace** repository.
 ## Project
 
 Oxygrace is a pure-Rust interpreter and renderer for **Grace** (xmgrace)
-`.agr` project files and `.xvg` data files. The core library parses a file
-into an in-memory model, rasterizes it (PNG/pixmap) or emits SVG, and can
-serialize the model back to `.agr` (`save_str`/`save`). A GUI editor
-(**`oxygrace-gui`**, egui/eframe) is being built on top — see
-`docs/gui-analysis.md` for the toolkit decision and architecture, and
-`/home/semen/.claude/plans/polished-coalescing-biscuit.md` for the roadmap
-(G1 viewer done; G2 selection, G3 inspector/undo/save, G4 direct
-manipulation, G5 wasm pending).
+`.agr` project files and `.xvg` data files. The core library (`oxygrace`)
+parses a file into an in-memory model, rasterizes it (PNG/pixmap) or emits
+SVG, and serializes the model back to `.agr` (`save_str`/`save`).
+`oxygrace-cli` is the headless renderer; `oxygrace-gui` (egui/eframe,
+native + wasm) is the interactive editor — see `docs/gui-analysis.md` for
+the toolkit decision and architecture. All GUI milestones (G1–G5) are
+complete; details in the Milestone status section below.
 
 The behavioural reference is Grace and the **QtGrace6** C/C++ port at
 `/home/semen/install/QtGrace6`. We reimplement its *semantics*, not its code.
@@ -22,26 +21,30 @@ antialiasing differ.
 
 ## Build / run / test
 
-The repo is a cargo **workspace**: the `oxygrace` library/CLI package lives at
-the root (commands below unchanged), the GUI is the `oxygrace-gui` member.
+The repo is a **virtual cargo workspace** with three member crates:
+`oxygrace/` (core library), `oxygrace-cli/` (headless renderer; the
+installed binary is named `oxygrace`), `oxygrace-gui/` (egui editor).
+The `examples/` corpus and `scripts/` live at the workspace root.
 
 ```bash
-cargo build                       # build lib + bin
-cargo run -- examples/axes.agr    # render to examples/axes.png
-cargo run -- in.agr -o out.png --width 1466 --height 1076
-cargo test                        # unit + corpus smoke + round-trip tests
-cargo clippy --workspace          # lint (keep clean)
-cargo run -p oxygrace-gui [file]  # the GUI editor
+cargo build --workspace                     # build everything
+cargo run -p oxygrace-cli -- examples/axes.agr      # render to examples/axes.png
+cargo run -p oxygrace-cli -- in.agr -o out.png --width 1466 --height 1076
+cargo test --workspace                      # unit + corpus smoke + round-trip tests
+cargo clippy --workspace                    # lint (keep clean)
+cargo run -p oxygrace-gui [file]            # the GUI editor
 # GUI self-screenshot (debug/CI): OXYGRACE_GUI_SHOT=/tmp/shot.png cargo run -p oxygrace-gui f.agr
+# Web build (from oxygrace-gui/): trunk serve --release   (or trunk build --release → dist/)
+#   wasm SIMD128 comes from .cargo/config.toml; CI deploy: .github/workflows/web-demo.yml
 ```
 
 ## Constraints (do not break these)
 
 - **Pure Rust only**, no C library wrappers unless absolutely necessary.
-- Command-language parsing uses the **`peg`** crate (`src/parse/grammar.rs`).
+- Command-language parsing uses the **`peg`** crate (`oxygrace/src/parse/grammar.rs`).
 - Rendering stack: **`tiny-skia`** (rasterizer) + **`ttf-parser`** (glyph
   outlines) + **`png`** (output). All antialiased. The canvas also has an
-  **SVG backend** (`src/render/svg.rs`): the same device-space paths are
+  **SVG backend** (`oxygrace/src/render/svg.rs`): the same device-space paths are
   serialized as SVG, text as glyph outline paths — keep both backends fed
   by the shared geometry in `canvas.rs`, never add backend-specific
   geometry.
@@ -75,11 +78,10 @@ so in a comment — don't substitute an unrelated guessed constant.
 ## Module layout
 
 Use the **`<module>.rs` + `<module>/` directory** convention — **never
-`mod.rs`**. (`src/model.rs` + `src/model/enums.rs`, etc.)
+`mod.rs`**. (`oxygrace/src/model.rs` + `oxygrace/src/model/enums.rs`, etc.)
 
 ```
-src/
-  main.rs            CLI
+oxygrace/src/
   lib.rs             public API: load / load_str / render_png / render_svg /
                      render_pixmap (RenderResult: pixmap + RenderInfo) /
                      save_str / save
@@ -90,20 +92,25 @@ src/
   text.rs            Grace string markup parser + glyph layout
   parse.rs + parse/  grammar.rs (peg), reader.rs (line loop + apply), data.rs (rows)
   write.rs           .agr writer (inverse of reader's apply; emits @version 50122)
+  import.rs          plain-data import (-xy/-nxy/-type) + autoscale_world
   render.rs + render/ canvas.rs (shared device primitives + raster backend),
-                     svg.rs (SVG backend), transform.rs (coords),
+                     svg.rs (SVG backend), transform.rs (coords + inverses),
                      record.rs (hit-test side-channel: ElementId, RenderInfo —
                      a pure observer; pixel output identical with it on/off)
   draw.rs + draw/    plot.rs (draw order), axes.rs (ticks/labels), sets.rs (data)
                      — draw code tags elements via canvas.push/pop_element
-assets/fonts/        bundled URW base35 OTFs (embedded via include_bytes!)
-examples/            *.agr test corpus (from QtGrace6)
-tests/               integration.rs (grammar/transform/corpus), hittest.rs
+oxygrace/assets/fonts/  bundled URW base35 OTFs (embedded via include_bytes!)
+oxygrace/tests/      integration.rs (grammar/transform/corpus), hittest.rs
                      (recording purity + hit-test), roundtrip.rs (save_str
-                     stability + render equality over the corpus)
+                     stability + render equality), stress.rs (1M-pt bench,
+                     ignored) — corpus paths are ../examples
+oxygrace-cli/src/    main.rs — the headless `oxygrace` binary (clap)
 oxygrace-gui/src/    egui app: app.rs (state + panels), render.rs (dirty →
-                     texture), plot_view.rs (ViewMap fit/blit + click hit-test),
-                     file.rs (rfd dialogs — keep all dialog calls here)
+                     texture), plot_view.rs (ViewMap fit/blit, hit-test,
+                     drags), inspector/ (property pages + rows), tree.rs,
+                     file.rs (all dialog calls; cfg-split native/web),
+                     theme.rs, args.rs, edit.rs, undo.rs
+examples/            *.agr test corpus (from QtGrace6), at the workspace root
 ```
 
 ## Reference formulas (ported from QtGrace6 — cite the source in code)
@@ -114,7 +121,7 @@ to this list as you port more; always keep the source reference.
 - **View→device** is **isotropic**: `px = vx·side`, `py = page_h − vy·side`,
   `side = min(page_w, page_h)`; origin bottom-left in view space, Y flipped for
   the image (`rstdrv.cpp` `VPoint2gdPoint`, `page_scale = MIN2(w,h)`).
-  `src/render/transform.rs`.
+  `oxygrace/src/render/transform.rs`.
 - **Default page**: our default is US-Letter landscape **792×612 px @ 72 DPI**.
   Files with `@page size W H` override it. (`DEFAULT_PAGE_WIDTH/HEIGHT` 733×538
   is Grace's *screen* default, not the hardcopy default.)
@@ -123,7 +130,7 @@ to this list as you port more; always keep the source reference.
   viewport (and view-loctype legend/object coords) by `get_page_viewport()` =
   `(width/side, height/side)` — pre-4.1.02 files store viewports as
   normalized-device-coords and must be stretched into the isotropic system.
-  `src/parse/reader.rs` `postprocess_version`.
+  `oxygrace/src/parse/reader.rs` `postprocess_version`.
 - **Line width px** = `linew · 0.0015 · side` (`MAGIC_LINEW_SCALE`, `globals.h`).
 - **Font em px** = `charsize · 0.028 · side` (`MAGIC_FONT_SCALE`, `t1fonts.h`).
 - **Tick mark length** = `0.02 · size` view units (`drawticks.cpp` `tsize`).
@@ -132,7 +139,7 @@ to this list as you port more; always keep the source reference.
   (`drawticks.cpp` `vbase_tlabel`). x labels CENTER|TOP, y labels RIGHT|MIDDLE.
 - **Axis label** anchor = `(distance to tick-label bbox edge) + tl_offset`
   (`drawticks.cpp` `vp_label_offset`). x label TOP-justified, y label
-  MIDDLE-justified (rotated, centered). `src/draw/axes.rs`.
+  MIDDLE-justified (rotated, centered). `oxygrace/src/draw/axes.rs`.
 - **Symbol radius / bar half-width** = `0.01 · symsize` view units
   (`plotone.cpp` `drawxysym`, `drawsetbars`).
 - **Chart bar grouping offset** accumulates `0.5·0.02·symsize` per set plus
@@ -140,10 +147,10 @@ to this list as you port more; always keep the source reference.
 - **Font slot order** (no `@map font`) is Grace's t1lib order: 0 Times-Roman,
   **1 Bold, 2 Italic**, 3 BoldItalic, 4 Helvetica, 5 Helv-Bold, 6 Helv-Oblique,
   7 Helv-BoldOblique, 8 Courier… 12 Symbol, 13 ZapfDingbats. Verified against
-  QtGrace's render of `tfonts.agr`. `src/font.rs`.
-- **Default 16-color map** verbatim from `draw.cpp` `cmap_init`. `src/color.rs`.
+  QtGrace's render of `tfonts.agr`. `oxygrace/src/font.rs`.
+- **Default 16-color map** verbatim from `draw.cpp` `cmap_init`. `oxygrace/src/color.rs`.
 - **Nine line-style dash patterns** and **32 fill patterns** copied from
-  `patterns.h`. `src/render/canvas.rs`, `src/patterns.rs`.
+  `patterns.h`. `oxygrace/src/render/canvas.rs`, `oxygrace/src/patterns.rs`.
 - **Clipping**: fills/lines/bars/errbars clip to the graph viewport ±
   `VP_EPSILON 1e-4` (`draw.cpp` `clip_line`/`clip_polygon`); symbols/avalues
   are unclipped but skip points outside the world window (`is_validWPoint`).
@@ -160,7 +167,7 @@ to this list as you port more; always keep the source reference.
 - **Font order by version** (pars.yacc): `@version < 50001` = old ACE/gr
   order (bold-then-italic, Symbol at 8); newer = FontDataBase order
   (italic-then-bold, Courier 8..11, Symbol 12). `@map font` overrides.
-  `src/font.rs` FONT_MAP_*.
+  `oxygrace/src/font.rs` FONT_MAP_*.
 - **Old-format fixups** (graphs.cpp `postprocess_project`): version <=40102
   also rescales view-loctype objects; 40200..=50005 ORs JUST_MIDDLE into
   string justs; <50001 selects the old font map.
@@ -240,7 +247,7 @@ Gaps found by baseline comparison, prioritized:
   `tick/ticklabel type spec` forms).
 - Zero/alt axes with offsets and per-side placement (tick op /
   ticklabel op / label op); `ticklabel formula` ($t arithmetic);
-  geographic (degreeslon/lat) and date/time formats (src/dates.rs,
+  geographic (degreeslon/lat) and date/time formats (oxygrace/src/dates.rs,
   Julian-date conversions).
 
 **M4 (done):**
@@ -313,7 +320,7 @@ inside to move it. Each gesture coalesces into one undo step
 (`App::end_gesture` on release); cursor feedback (grab/resize icons);
 recomputed from press-time originals each frame so there is no drift.
 **GUI G4.5 (done):** xmgrace-style CLI (`args.rs`: project/data files,
-`-xy`, `-nxy`, `-type`, `-free`; core `src/import.rs` `import_data_str` +
+`-xy`, `-nxy`, `-type`, `-free`; core `oxygrace/src/import.rs` `import_data_str` +
 `autoscale_world`); free page aspect (View → Free aspect: page follows the
 canvas AND viewports/view-anchored objects rescale with the page extents —
 the postprocess_version stretch — so the plot fills the window; original
@@ -335,9 +342,21 @@ line: ~1.5 s → 25–50 ms render, hover hit-test µs; 1M symbols: 8.2 s →
 0.3 s, records 2M → 53k. Theme: View → Mode has System/Dark/Light —
 egui's `system_theme()` gives the OS dark/light preference only (no system
 palette colors exist in egui).
-Next: G5 wasm (roadmap in
+**GUI G5 (done):** wasm web build. `main.rs` cfg-split (native
+eframe::run_native vs eframe::WebRunner onto `oxygrace_canvas` in
+index.html); `file.rs` cfg-split — web opens via `rfd::AsyncFileDialog`
+(results delivered through `App::file_tx` mpsc, polled in `logic`) and
+saves by triggering a browser download (web-sys Blob + anchor); wasm
+SIMD128 enabled via `.cargo/config.toml`; the web demo boots with a
+bundled example. Bundle via trunk (`oxygrace-gui/index.html`,
+`Trunk.toml`, ~8.4 MB wasm); GitHub Pages deploy workflow in
+`.github/workflows/web-demo.yml` (enable Pages with source "GitHub
+Actions"). Verified end-to-end in headless Chromium: UI + plot render in
+the browser, System theme follows `prefers-color-scheme`.
+
+GUI milestones complete (G1–G5); roadmap history in
 `/home/semen/.claude/plans/polished-coalescing-biscuit.md`; toolkit
-analysis in `docs/gui-analysis.md`).
+analysis in `docs/gui-analysis.md`.
 
 See `/home/semen/.claude/plans/we-will-build-an-wobbly-elephant.md` for the
 original plan.

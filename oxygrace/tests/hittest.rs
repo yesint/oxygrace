@@ -17,7 +17,7 @@ fn dev(project: &Project, vx: f64, vy: f64) -> (f32, f32) {
 #[test]
 fn recording_does_not_perturb_rendering() {
     let fonts = FontSet::load();
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
     let mut n = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
@@ -41,7 +41,7 @@ fn recording_does_not_perturb_rendering() {
 #[test]
 fn hit_test_axes_example() {
     let fonts = FontSet::load();
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/axes.agr");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/axes.agr");
     let project = oxygrace::load(path).unwrap();
     let res = oxygrace::render_pixmap(&project, &fonts);
     let info = &res.info;
@@ -87,7 +87,7 @@ fn hit_test_axes_example() {
 #[test]
 fn axis_wins_over_coincident_frame() {
     let fonts = FontSet::load();
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/log2log.agr");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/log2log.agr");
     let project = oxygrace::load(path).unwrap();
     let res = oxygrace::render_pixmap(&project, &fonts);
     let v = project.graphs[0].view;
@@ -103,7 +103,7 @@ fn axis_wins_over_coincident_frame() {
 #[test]
 fn grid_lines_do_not_hit_axes() {
     let fonts = FontSet::load();
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/bar.agr");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/bar.agr");
     let project = oxygrace::load(path).unwrap();
     let res = oxygrace::render_pixmap(&project, &fonts);
     let g = &project.graphs[0];
@@ -128,7 +128,7 @@ fn grid_lines_do_not_hit_axes() {
 #[test]
 fn recorded_elements_are_consistent() {
     let fonts = FontSet::load();
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
         if path.extension().is_none_or(|e| e != "agr") {
