@@ -48,3 +48,11 @@ pub fn render_png(project: &Project) -> Vec<u8> {
     let fonts = font::FontSet::load();
     draw::draw_project(project, &fonts)
 }
+
+/// Render a project to an SVG document using the bundled fonts. Text is
+/// emitted as glyph outline paths, so the result displays identically
+/// everywhere and matches the PNG rendering.
+pub fn render_svg(project: &Project) -> String {
+    let fonts = font::FontSet::load();
+    draw::draw_project_svg(project, &fonts)
+}

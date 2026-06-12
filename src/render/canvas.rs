@@ -1,7 +1,13 @@
-//! The drawing canvas: a [`tiny_skia::Pixmap`] plus the device primitives the
-//! draw layer calls (polylines, filled polygons, text), all taking **view**
-//! coordinates and color *indices*, which are resolved against the project's
-//! color map here.
+//! The drawing canvas: the device primitives the draw layer calls
+//! (polylines, filled polygons, text), all taking **view** coordinates and
+//! color *indices*, which are resolved against the project's color map here.
+//!
+//! The canvas owns the shared geometry work — view→device mapping, dash
+//! tables, pattern selection, text layout and justification — and hands the
+//! resulting device-space paths to one of two backends: a raster backend
+//! (tiny-skia, PNG output) or a vector backend (SVG markup). Both receive
+//! identical geometry, so the SVG output matches the PNG rendering exactly,
+//! with text emitted as glyph outline paths.
 
 use tiny_skia::{
     FillRule, FilterQuality, LineCap, LineJoin, Mask, Paint, Path, PathBuilder, Pattern, Pixmap,
@@ -12,14 +18,19 @@ use crate::color::{self, Rgba};
 use crate::font::FontSet;
 use crate::model::Project;
 use crate::patterns::PATTERN_BITS;
+use crate::render::svg::SvgBackend;
 use crate::render::transform::PageTransform;
 use crate::text;
 
-/// Build a 16x16 RGBA tile for a Grace fill pattern in the given color.
-/// Set bits get the foreground color, unset bits the **background** color:
-/// Grace pattern fills are opaque (the gd driver tiles fg-on-bg), so a
-/// patterned shape occludes whatever is below it — overlapping hatched
-/// circles in txyr.agr shingle cleanly instead of showing buried outlines.
+/// What a path is filled with (colors already resolved).
+pub(crate) enum FillPaint {
+    Solid(Rgba),
+    /// A Grace hatch pattern: 16x16 tile of `fg` bits over an opaque `bg`
+    /// (Grace pattern fills occlude what is below them, like the gd driver).
+    Hatch { pattern: i32, fg: Rgba, bg: Rgba },
+}
+
+/// Build a 16x16 RGBA tile for a Grace fill pattern (raster backend).
 fn pattern_tile(pattern: i32, color: Rgba, bg: Rgba) -> Option<Pixmap> {
     let idx = pattern as usize;
     if !(0..PATTERN_BITS.len()).contains(&idx) {
@@ -38,6 +49,122 @@ fn pattern_tile(pattern: i32, color: Rgba, bg: Rgba) -> Option<Pixmap> {
         }
     }
     Some(tile)
+}
+
+/// Raster output: a tiny-skia pixmap plus the active clip mask.
+struct RasterBackend {
+    pixmap: Pixmap,
+    /// Active clip region (device-space mask), or `None` for unclipped
+    /// drawing. Mirrors Grace's `setclipping` + per-graph `viewport` clip in
+    /// `draw.cpp` (`clip_line`/`clip_polygon`): data elements are clipped to
+    /// the graph viewport, decorations are not.
+    clip: Option<Mask>,
+}
+
+impl RasterBackend {
+    fn new(width: u32, height: u32) -> Self {
+        let mut pixmap = Pixmap::new(width, height).expect("non-zero page dimensions");
+        pixmap.fill(tiny_skia::Color::WHITE);
+        RasterBackend { pixmap, clip: None }
+    }
+
+    fn set_clip(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
+        let mut mask = Mask::new(self.pixmap.width(), self.pixmap.height())
+            .expect("non-zero page dimensions");
+        if let Some(rect) = tiny_skia::Rect::from_ltrb(x0, y0, x1, y1) {
+            let path = PathBuilder::from_rect(rect);
+            mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
+        }
+        self.clip = Some(mask);
+    }
+
+    fn stroke_path(&mut self, path: &Path, color: Rgba, width: f32, dash: Option<&[f32]>) {
+        let mut paint = Paint::default();
+        paint.set_color(color.to_skia());
+        paint.anti_alias = true;
+        let mut stroke = Stroke {
+            width,
+            line_cap: LineCap::Butt,
+            line_join: LineJoin::Miter,
+            ..Stroke::default()
+        };
+        if let Some(dash) = dash {
+            stroke.dash = StrokeDash::new(dash.to_vec(), 0.0);
+        }
+        self.pixmap
+            .stroke_path(path, &paint, &stroke, Transform::identity(), self.clip.as_ref());
+    }
+
+    fn fill_path(&mut self, path: &Path, fill: &FillPaint, rule: FillRule) {
+        let mut paint = Paint {
+            anti_alias: true,
+            ..Default::default()
+        };
+        match fill {
+            FillPaint::Solid(c) => paint.set_color(c.to_skia()),
+            FillPaint::Hatch { pattern, fg, bg } => {
+                match pattern_tile(*pattern, *fg, *bg) {
+                    Some(tile) => {
+                        paint.shader = Pattern::new(
+                            tile.as_ref(),
+                            SpreadMode::Repeat,
+                            FilterQuality::Nearest,
+                            1.0,
+                            Transform::identity(),
+                        );
+                        self.pixmap.fill_path(
+                            path,
+                            &paint,
+                            rule,
+                            Transform::identity(),
+                            self.clip.as_ref(),
+                        );
+                        return;
+                    }
+                    // Unknown pattern -> fall back to solid foreground.
+                    None => paint.set_color(fg.to_skia()),
+                }
+            }
+        }
+        self.pixmap
+            .fill_path(path, &paint, rule, Transform::identity(), self.clip.as_ref());
+    }
+}
+
+/// The output device a canvas draws into.
+enum Backend {
+    Raster(RasterBackend),
+    Svg(SvgBackend),
+}
+
+impl Backend {
+    fn set_clip(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
+        match self {
+            Backend::Raster(b) => b.set_clip(x0, y0, x1, y1),
+            Backend::Svg(b) => b.set_clip(x0, y0, x1, y1),
+        }
+    }
+
+    fn clear_clip(&mut self) {
+        match self {
+            Backend::Raster(b) => b.clip = None,
+            Backend::Svg(b) => b.clear_clip(),
+        }
+    }
+
+    fn stroke_path(&mut self, path: &Path, color: Rgba, width: f32, dash: Option<&[f32]>) {
+        match self {
+            Backend::Raster(b) => b.stroke_path(path, color, width, dash),
+            Backend::Svg(b) => b.stroke_path(path, color, width, dash),
+        }
+    }
+
+    fn fill_path(&mut self, path: &Path, fill: &FillPaint, rule: FillRule) {
+        match self {
+            Backend::Raster(b) => b.fill_path(path, fill, rule),
+            Backend::Svg(b) => b.fill_path(path, fill, rule),
+        }
+    }
 }
 
 /// Horizontal text alignment.
@@ -64,32 +191,33 @@ pub struct VPoint {
     pub y: f64,
 }
 
-/// Wraps the output pixmap and the page transform; resolves colors via the
-/// borrowed [`Project`] and outlines glyphs via the borrowed [`FontSet`].
+/// Draws device primitives into a backend; resolves colors via the borrowed
+/// [`Project`] and outlines glyphs via the borrowed [`FontSet`].
 pub struct Canvas<'a> {
-    pixmap: Pixmap,
+    backend: Backend,
     page: PageTransform,
     project: &'a Project,
     fonts: &'a FontSet,
-    /// Active clip region (device-space mask), or `None` for unclipped
-    /// drawing. Mirrors Grace's `setclipping` + per-graph `viewport` clip in
-    /// `draw.cpp` (`clip_line`/`clip_polygon`): data elements are clipped to
-    /// the graph viewport, decorations are not.
-    clip: Option<Mask>,
 }
 
 impl<'a> Canvas<'a> {
-    /// Create a white page sized from the project.
+    /// Create a raster (PNG) canvas with a white page sized from the project.
     pub fn new(project: &'a Project, fonts: &'a FontSet) -> Self {
-        let mut pixmap = Pixmap::new(project.page_width, project.page_height)
-            .expect("non-zero page dimensions");
-        pixmap.fill(tiny_skia::Color::WHITE);
         Canvas {
-            pixmap,
+            backend: Backend::Raster(RasterBackend::new(project.page_width, project.page_height)),
             page: PageTransform::new(project.page_width, project.page_height),
             project,
             fonts,
-            clip: None,
+        }
+    }
+
+    /// Create an SVG canvas sized from the project.
+    pub fn new_svg(project: &'a Project, fonts: &'a FontSet) -> Self {
+        Canvas {
+            backend: Backend::Svg(SvgBackend::new(project.page_width, project.page_height)),
+            page: PageTransform::new(project.page_width, project.page_height),
+            project,
+            fonts,
         }
     }
 
@@ -104,18 +232,12 @@ impl<'a> Canvas<'a> {
         let (x1, y1) = self
             .page
             .view_to_device(xmax + VP_EPSILON, ymin - VP_EPSILON);
-        let mut mask = Mask::new(self.pixmap.width(), self.pixmap.height())
-            .expect("non-zero page dimensions");
-        if let Some(rect) = tiny_skia::Rect::from_ltrb(x0, y0, x1, y1) {
-            let path = PathBuilder::from_rect(rect);
-            mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
-        }
-        self.clip = Some(mask);
+        self.backend.set_clip(x0, y0, x1, y1);
     }
 
     /// Disable clipping (Grace `setclipping(FALSE)`).
     pub fn clear_clip(&mut self) {
-        self.clip = None;
+        self.backend.clear_clip();
     }
 
     /// Access the page transform (for size conversions in the draw layer).
@@ -123,28 +245,35 @@ impl<'a> Canvas<'a> {
         &self.page
     }
 
-    /// Fill the whole page with a color index.
-    pub fn fill_page(&mut self, color: i32) {
-        self.pixmap.fill(color::resolve(self.project, color).to_skia());
-    }
-
-    /// Encode the pixmap as PNG bytes.
+    /// Encode the rendering as PNG bytes (raster canvases only).
     pub fn to_png(&self) -> Vec<u8> {
-        self.pixmap.encode_png().expect("PNG encoding")
+        match &self.backend {
+            Backend::Raster(b) => b.pixmap.encode_png().expect("PNG encoding"),
+            Backend::Svg(_) => panic!("to_png called on an SVG canvas"),
+        }
     }
 
-    /// Build a stroke for a line style index and width (in px).
-    fn stroke(&self, linestyle: i32, width_px: f32) -> Stroke {
-        let mut stroke = Stroke {
-            width: width_px.max(0.1),
-            line_cap: LineCap::Butt,
-            line_join: LineJoin::Miter,
-            ..Stroke::default()
-        };
-        if let Some(dash) = dash_pattern(linestyle, width_px) {
-            stroke.dash = StrokeDash::new(dash, 0.0);
+    /// Finish an SVG canvas and return the document (SVG canvases only).
+    pub fn into_svg(self) -> String {
+        match self.backend {
+            Backend::Svg(b) => b.finish(),
+            Backend::Raster(_) => panic!("into_svg called on a raster canvas"),
         }
-        stroke
+    }
+
+    /// Resolve a fill (color index + Grace pattern index) for the backend.
+    /// Pattern 0 means "no fill" and is handled by the callers.
+    fn fill_paint(&self, color: i32, pattern: i32) -> FillPaint {
+        let rgba = color::resolve(self.project, color);
+        if pattern == 1 || !(0..PATTERN_BITS.len() as i32).contains(&pattern) {
+            FillPaint::Solid(rgba)
+        } else {
+            FillPaint::Hatch {
+                pattern,
+                fg: rgba,
+                bg: color::resolve(self.project, 0),
+            }
+        }
     }
 
     /// Stroke a polyline given in view coordinates.
@@ -162,12 +291,10 @@ impl<'a> Canvas<'a> {
             }
         }
         let Some(path) = pb.finish() else { return };
-        let mut paint = Paint::default();
-        paint.set_color(color::resolve(self.project, color).to_skia());
-        paint.anti_alias = true;
-        let stroke = self.stroke(linestyle, self.page.linewidth_px(linewidth));
-        self.pixmap
-            .stroke_path(&path, &paint, &stroke, Transform::identity(), self.clip.as_ref());
+        let width = self.page.linewidth_px(linewidth).max(0.1);
+        let dash = dash_pattern(linestyle, width);
+        let rgba = color::resolve(self.project, color);
+        self.backend.stroke_path(&path, rgba, width, dash.as_deref());
     }
 
     /// Fill a closed polygon (view coords) with a color index and fill pattern.
@@ -179,7 +306,7 @@ impl<'a> Canvas<'a> {
     /// Like [`Canvas::fill_polygon`] with an explicit fill rule
     /// (0 = winding, 1 = even-odd; Grace `setfillrule` in `drawsetfill`).
     pub fn fill_polygon_rule(&mut self, pts: &[VPoint], color: i32, pattern: i32, rule: i32) {
-        if pts.len() < 3 {
+        if pts.len() < 3 || pattern == 0 {
             return;
         }
         let mut pb = PathBuilder::new();
@@ -198,48 +325,17 @@ impl<'a> Canvas<'a> {
         } else {
             FillRule::Winding
         };
-        self.fill_path_rule(&path, color, pattern, rule);
+        let paint = self.fill_paint(color, pattern);
+        self.backend.fill_path(&path, &paint, rule);
     }
 
     /// Fill a path with a color index and fill pattern (shared by all fills).
     fn fill_path_pen(&mut self, path: &Path, color: i32, pattern: i32) {
-        self.fill_path_rule(path, color, pattern, FillRule::Winding);
-    }
-
-    /// Fill a path with a color index, fill pattern and explicit fill rule.
-    fn fill_path_rule(&mut self, path: &Path, color: i32, pattern: i32, rule: FillRule) {
         if pattern == 0 {
             return;
         }
-        let rgba = color::resolve(self.project, color);
-        let mut paint = Paint {
-            anti_alias: true,
-            ..Default::default()
-        };
-        if pattern == 1 {
-            paint.set_color(rgba.to_skia());
-            self.pixmap
-                .fill_path(path, &paint, rule, Transform::identity(), self.clip.as_ref());
-            return;
-        }
-        // Hatched pattern: tile a 16x16 stencil, foreground on background.
-        let bg = color::resolve(self.project, 0);
-        let Some(tile) = pattern_tile(pattern, rgba, bg) else {
-            // Unknown pattern -> fall back to solid.
-            paint.set_color(rgba.to_skia());
-            self.pixmap
-                .fill_path(path, &paint, rule, Transform::identity(), self.clip.as_ref());
-            return;
-        };
-        paint.shader = Pattern::new(
-            tile.as_ref(),
-            SpreadMode::Repeat,
-            FilterQuality::Nearest,
-            1.0,
-            Transform::identity(),
-        );
-        self.pixmap
-            .fill_path(path, &paint, rule, Transform::identity(), self.clip.as_ref());
+        let paint = self.fill_paint(color, pattern);
+        self.backend.fill_path(path, &paint, FillRule::Winding);
     }
 
     /// Width of a marked-up string in view units, at the given char size.
@@ -302,12 +398,10 @@ impl<'a> Canvas<'a> {
         let Some(path) = PathBuilder::from_circle(cx, cy, r) else {
             return;
         };
-        let mut paint = Paint::default();
-        paint.set_color(color::resolve(self.project, color).to_skia());
-        paint.anti_alias = true;
-        let stroke = self.stroke(ls, self.page.linewidth_px(lw));
-        self.pixmap
-            .stroke_path(&path, &paint, &stroke, Transform::identity(), self.clip.as_ref());
+        let width = self.page.linewidth_px(lw).max(0.1);
+        let dash = dash_pattern(ls, width);
+        let rgba = color::resolve(self.project, color);
+        self.backend.stroke_path(&path, rgba, width, dash.as_deref());
     }
 
     /// Build the oval path inscribed in a view-coordinate rectangle.
@@ -330,12 +424,10 @@ impl<'a> Canvas<'a> {
             return;
         }
         let Some(path) = self.oval_path(p1, p2) else { return };
-        let mut paint = Paint::default();
-        paint.set_color(color::resolve(self.project, color).to_skia());
-        paint.anti_alias = true;
-        let stroke = self.stroke(ls, self.page.linewidth_px(lw));
-        self.pixmap
-            .stroke_path(&path, &paint, &stroke, Transform::identity(), self.clip.as_ref());
+        let width = self.page.linewidth_px(lw).max(0.1);
+        let dash = dash_pattern(ls, width);
+        let rgba = color::resolve(self.project, color);
+        self.backend.stroke_path(&path, rgba, width, dash.as_deref());
     }
 
     /// Draw a marked-up string anchored at a view point.
@@ -410,7 +502,7 @@ impl<'a> Canvas<'a> {
             (bx0 + hfudge * (bx1 - bx0), by0 + vfudge * (by1 - by0))
         };
 
-        let default_color = color::resolve(self.project, color).to_skia();
+        let default_color = color::resolve(self.project, color);
         for g in &layout.glyphs {
             let outline = self.fonts.outline_char(g.font, g.ch);
             let Some(path) = outline.path else { continue };
@@ -432,15 +524,12 @@ impl<'a> Canvas<'a> {
             let Some(tpath) = path.transform(ts) else {
                 continue;
             };
-            let mut paint = Paint::default();
             let col = match g.color {
-                Some(idx) => color::resolve(self.project, idx).to_skia(),
+                Some(idx) => color::resolve(self.project, idx),
                 None => default_color,
             };
-            paint.set_color(col);
-            paint.anti_alias = true;
-            self.pixmap
-                .fill_path(&tpath, &paint, FillRule::Winding, Transform::identity(), None);
+            self.backend
+                .fill_path(&tpath, &FillPaint::Solid(col), FillRule::Winding);
         }
 
         // Under/overline rules from \u / \o markup, as rectangles in the
@@ -461,15 +550,12 @@ impl<'a> Canvas<'a> {
             }
             pb.close();
             let Some(path) = pb.finish() else { continue };
-            let mut paint = Paint::default();
             let col = match r.color {
-                Some(idx) => color::resolve(self.project, idx).to_skia(),
+                Some(idx) => color::resolve(self.project, idx),
                 None => default_color,
             };
-            paint.set_color(col);
-            paint.anti_alias = true;
-            self.pixmap
-                .fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+            self.backend
+                .fill_path(&path, &FillPaint::Solid(col), FillRule::Winding);
         }
     }
 }

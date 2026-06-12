@@ -29,7 +29,11 @@ cargo clippy                      # lint (keep clean)
 - **Pure Rust only**, no C library wrappers unless absolutely necessary.
 - Command-language parsing uses the **`peg`** crate (`src/parse/grammar.rs`).
 - Rendering stack: **`tiny-skia`** (rasterizer) + **`ttf-parser`** (glyph
-  outlines) + **`png`** (output). All antialiased.
+  outlines) + **`png`** (output). All antialiased. The canvas also has an
+  **SVG backend** (`src/render/svg.rs`): the same device-space paths are
+  serialized as SVG, text as glyph outline paths — keep both backends fed
+  by the shared geometry in `canvas.rs`, never add backend-specific
+  geometry.
 - **TrueType/OpenType fonts only** (no Type1). Strings are **UTF-8** (files are
   decoded leniently to tolerate legacy Latin-1).
 - Idiomatic, simple, readable, documented code. No overengineering.
@@ -71,7 +75,8 @@ src/
   font.rs            embedded URW base35 OTFs, glyph outlines via ttf-parser
   text.rs            Grace string markup parser + glyph layout
   parse.rs + parse/  grammar.rs (peg), reader.rs (line loop + apply), data.rs (rows)
-  render.rs + render/ canvas.rs (tiny-skia device primitives), transform.rs (coords)
+  render.rs + render/ canvas.rs (shared device primitives + raster backend),
+                     svg.rs (SVG backend), transform.rs (coords)
   draw.rs + draw/    plot.rs (draw order), axes.rs (ticks/labels), sets.rs (data)
 assets/fonts/        bundled URW base35 OTFs (embedded via include_bytes!)
 examples/            *.agr test corpus (from QtGrace6)
@@ -228,6 +233,12 @@ Gaps found by baseline comparison, prioritized:
 - Not implemented: smith charts (grace's own `draw_smith_chart` is an
   empty stub — there is no reference behavior); CSV import. `.xvg`
   files load through the tolerant reader.
+
+**Post-M4:** SVG output (`render_svg`, `-o out.svg`): the canvas grew a
+backend enum — raster (tiny-skia) and SVG writer — both fed identical
+device-space geometry, so the SVG matches the PNG pixel-for-pixel
+(validated by rasterizing with Chromium and diffing). Text is emitted
+as glyph outline paths.
 
 See `/home/semen/.claude/plans/we-will-build-an-wobbly-elephant.md` for the
 original plan.

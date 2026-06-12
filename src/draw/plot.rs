@@ -6,22 +6,35 @@ use crate::draw::{axes, decor, objects, pie, sets};
 use crate::model::{Graph, Project};
 use crate::render::{Canvas, HAlign, VAlign, VPoint};
 
-/// Render an entire project onto a fresh canvas-backed pixmap.
+/// Render an entire project to PNG bytes.
 pub fn draw_project(project: &Project, fonts: &crate::font::FontSet) -> Vec<u8> {
     let mut canvas = Canvas::new(project, fonts);
+    paint_project(&mut canvas, project);
+    canvas.to_png()
+}
+
+/// Render an entire project to an SVG document. The same drawing code runs
+/// against the SVG backend, so the output matches the raster rendering.
+pub fn draw_project_svg(project: &Project, fonts: &crate::font::FontSet) -> String {
+    let mut canvas = Canvas::new_svg(project, fonts);
+    paint_project(&mut canvas, project);
+    canvas.into_svg()
+}
+
+/// Paint a project onto a canvas (either backend).
+fn paint_project(canvas: &mut Canvas, project: &Project) {
     for (i, graph) in project.graphs.iter().enumerate() {
         if !graph.hidden {
-            draw_graph(&mut canvas, graph);
+            draw_graph(canvas, graph);
             // World-loctype annotation objects attached to this graph
             // (plotone.cpp: draw_objects(gno) at the end of plotone).
-            objects::draw_objects(&mut canvas, project, objects::Pass::Graph { index: i, graph });
+            objects::draw_objects(canvas, project, objects::Pass::Graph { index: i, graph });
         }
     }
     // View-loctype objects are drawn once, after all graphs
     // (drawgraph: draw_objects(-1)), then the timestamp (draw_timestamp).
-    objects::draw_objects(&mut canvas, project, objects::Pass::Page);
-    objects::draw_timestamp(&mut canvas, project);
-    canvas.to_png()
+    objects::draw_objects(canvas, project, objects::Pass::Page);
+    objects::draw_timestamp(canvas, project);
 }
 
 /// Draw one graph in Grace's layering order.

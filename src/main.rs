@@ -1,18 +1,19 @@
-//! `oxygrace` CLI: render a Grace `.agr`/`.xvg` file to a PNG.
+//! `oxygrace` CLI: render a Grace `.agr`/`.xvg` file to a PNG or SVG.
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 
-/// Render a Grace `.agr`/`.xvg` file to a PNG image.
+/// Render a Grace `.agr`/`.xvg` file to a PNG or SVG image.
 #[derive(Parser, Debug)]
 #[command(name = "oxygrace", version, about)]
 struct Cli {
     /// Input `.agr`/`.xvg` file.
     input: PathBuf,
 
-    /// Output PNG path (defaults to the input name with a `.png` extension).
+    /// Output path (defaults to the input name with a `.png` extension).
+    /// A `.svg` extension selects SVG output.
     #[arg(short, long)]
     output: Option<PathBuf>,
 
@@ -39,10 +40,16 @@ fn main() -> Result<()> {
         project.page_height = h;
     }
 
-    let png = oxygrace::render_png(&project);
-
     let output = cli.output.unwrap_or_else(|| cli.input.with_extension("png"));
-    std::fs::write(&output, png).with_context(|| format!("writing {}", output.display()))?;
+    let svg = output
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("svg"));
+    let bytes = if svg {
+        oxygrace::render_svg(&project).into_bytes()
+    } else {
+        oxygrace::render_png(&project)
+    };
+    std::fs::write(&output, bytes).with_context(|| format!("writing {}", output.display()))?;
     eprintln!("wrote {}", output.display());
     Ok(())
 }

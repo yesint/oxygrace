@@ -96,3 +96,33 @@ fn corpus_loads_and_renders() {
     }
     assert!(count > 0, "no example files found in {dir}");
 }
+
+/// Every corpus file must also render to a structurally sound SVG document.
+#[test]
+fn corpus_renders_svg() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
+    let mut count = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("agr") {
+            continue;
+        }
+        let project = oxygrace::load(&path)
+            .unwrap_or_else(|e| panic!("loading {}: {e}", path.display()));
+        let svg = oxygrace::render_svg(&project);
+        assert!(
+            svg.starts_with("<?xml") && svg.trim_end().ends_with("</svg>"),
+            "malformed SVG for {}",
+            path.display()
+        );
+        // Every element we emit is self-closing or a matched pair; a quick
+        // structural check that something was actually drawn:
+        assert!(
+            svg.contains("<path "),
+            "no drawing elements in SVG for {}",
+            path.display()
+        );
+        count += 1;
+    }
+    assert!(count > 0, "no example files found in {dir}");
+}

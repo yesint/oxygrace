@@ -8,4 +8,4 @@ pub mod pie;
 pub mod plot;
 pub mod sets;
 
-pub use plot::draw_project;
+pub use plot::{draw_project, draw_project_svg};

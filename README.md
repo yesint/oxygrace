@@ -1,8 +1,9 @@
 # oxygrace
 
 A pure-Rust, headless renderer for [Grace](https://plasma-gate.weizmann.ac.il/Grace/)
-(xmgrace) project files. It reads `.agr` / `.xvg` files and rasterizes them to
-antialiased PNG images — no GUI, no X11, no external C libraries.
+(xmgrace) project files. It reads `.agr` / `.xvg` files and renders them to
+antialiased PNG images or clean vector SVG — no GUI, no X11, no external C
+libraries.
 
 Grace is a venerable 2D plotting tool whose file formats are still produced by
 a lot of scientific software (GROMACS and friends emit `.xvg`). oxygrace turns
@@ -48,6 +49,9 @@ projects.
   transformations (rotation, mirroring, slanting).
 - **Styling** — Grace's default palette with `@map color` overrides, all 32
   fill patterns, the nine dash styles, legends, frames and background fills.
+- **Output** — antialiased PNG and vector SVG from the same drawing code;
+  in SVG, text is emitted as glyph outlines, so documents display
+  identically everywhere with no font dependencies.
 - **Fonts** — ships with the URW base35 fonts (metric-compatible with
   Grace's PostScript set) embedded in the binary; no font installation
   needed.
@@ -83,6 +87,7 @@ cargo build --release        # binary in target/release/oxygrace
 ```bash
 oxygrace input.agr                  # writes input.png next to the input
 oxygrace input.agr -o out.png       # explicit output path
+oxygrace input.agr -o out.svg       # SVG output (chosen by extension)
 oxygrace input.agr --width 1584 --height 1224   # override the page size
 ```
 
@@ -90,14 +95,15 @@ oxygrace input.agr --width 1584 --height 1224   # override the page size
 
 ```rust
 let project = oxygrace::load("plot.agr")?;
-let png = oxygrace::render_png(&project);
+let png = oxygrace::render_png(&project);   // Vec<u8>
+let svg = oxygrace::render_svg(&project);   // String
 std::fs::write("plot.png", png)?;
 ```
 
 ## Not supported
 
 - Smith charts (Grace itself never implemented drawing them).
-- PostScript/SVG output — oxygrace renders PNG only.
+- PostScript output.
 - Grace's interactive command/scripting language — oxygrace renders project
   files, it does not evaluate scripts.
 
