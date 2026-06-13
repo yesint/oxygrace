@@ -17,27 +17,52 @@ pub fn open_dialog(app: &mut App) {
     }
 }
 
+/// Open a file on the web by driving a hidden `<input type="file">`
+/// directly: a single click opens the browser's own file picker and the
+/// file loads on the `change` event — no intermediate "Ok" dialog (which
+/// is what `rfd`'s web backend would impose).
 #[cfg(target_arch = "wasm32")]
 pub fn open_dialog(app: &mut App) {
+    use eframe::wasm_bindgen::{closure::Closure, JsCast};
+
     let tx = app.file_tx.clone();
     let ctx = app.egui_ctx.clone();
-    wasm_bindgen_futures::spawn_local(async move {
-        let Some(file) = rfd::AsyncFileDialog::new()
-            .add_filter("Grace project", &["agr", "xvg", "dat"])
-            .pick_file()
-            .await
-        else {
+    let document = web_sys::window().unwrap().document().unwrap();
+    let input: web_sys::HtmlInputElement = document
+        .create_element("input")
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    input.set_type("file");
+    input.set_accept(".agr,.xvg,.dat");
+
+    // The `change` handler keeps the input alive (it captures a clone), and
+    // `once_into_js` keeps the closure alive until it fires once.
+    let input_for_change = input.clone();
+    let onchange = Closure::once_into_js(move || {
+        let Some(file) = input_for_change.files().and_then(|f| f.get(0)) else {
             return;
         };
-        let bytes = file.read().await;
-        // Same lenient decoding as oxygrace::load: UTF-8, else Latin-1.
-        let content = match String::from_utf8(bytes) {
-            Ok(s) => s,
-            Err(e) => e.as_bytes().iter().map(|&b| b as char).collect(),
-        };
-        let _ = tx.send((file.file_name(), content));
-        ctx.request_repaint();
+        let name = file.name();
+        let buffer_promise = file.array_buffer();
+        wasm_bindgen_futures::spawn_local(async move {
+            let Ok(buffer) = wasm_bindgen_futures::JsFuture::from(buffer_promise).await else {
+                return;
+            };
+            let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
+            // Same lenient decoding as oxygrace::load: UTF-8, else Latin-1.
+            let content = match String::from_utf8(bytes) {
+                Ok(s) => s,
+                Err(e) => e.as_bytes().iter().map(|&b| b as char).collect(),
+            };
+            let _ = tx.send((name, content));
+            ctx.request_repaint();
+        });
     });
+    input.set_onchange(Some(onchange.unchecked_ref()));
+    // A detached input still opens the native picker on click (modern
+    // browsers), and stays alive via the closure's captured clone.
+    input.click();
 }
 
 /// Install a file delivered by the async picker (web).
