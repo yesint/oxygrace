@@ -140,8 +140,10 @@ oxygrace-gui -nxy results.dat            # plot a multi-column data file
 
 ### In the browser
 
-The same editor compiles to WebAssembly. To run it locally you need
-[trunk](https://trunkrs.dev):
+The same editor compiles to WebAssembly — **try the live demo at
+<https://yesint.github.io/oxygrace/>**.
+
+To run it locally you need [trunk](https://github.com/trunk-rs/trunk):
 
 ```bash
 cd oxygrace-gui
