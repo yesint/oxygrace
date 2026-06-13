@@ -354,6 +354,16 @@ bundled example. Bundle via trunk (`oxygrace-gui/index.html`,
 Actions"). Verified end-to-end in headless Chromium: UI + plot render in
 the browser, System theme follows `prefers-color-scheme`.
 
+**GUI toolbar (done):** an icon-only toolbar (`icons.rs` — monochrome
+glyphs drawn procedurally with the egui painter, no image assets) above the
+project tree, wrapping to the panel width: Open, Save, Autoscale-all,
+Autoscale-to-set, Pan, Free aspect. Two modal canvas tools (`App::tool`:
+Select/Pan/PickSet, gated in `plot_view::show`): Pan drags the world window
+of the graph under the cursor (`WorldTransform::pan_world`, scaled-space so
+log axes pan uniformly), Autoscale-to-set fits a graph to a clicked set.
+Autoscale helpers set the world to data extents (all non-hidden sets, or
+one); all are undoable edits.
+
 GUI milestones complete (G1–G5); roadmap history in
 `/home/semen/.claude/plans/polished-coalescing-biscuit.md`; toolkit
 analysis in `docs/gui-analysis.md`.

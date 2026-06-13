@@ -7,6 +7,17 @@ use oxygrace::{ElementId, FontSet, Project, RenderInfo};
 use crate::edit::Edit;
 use crate::undo::UndoStack;
 
+/// Active canvas tool, switched from the toolbar.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Tool {
+    /// Default: select, move and edit plot elements.
+    Select,
+    /// Drag to pan the world window of the graph under the cursor.
+    Pan,
+    /// Click a set to autoscale its graph to that set's extents.
+    PickSet,
+}
+
 pub struct App {
     /// Embedded fonts, loaded once for the app's lifetime.
     pub fonts: FontSet,
@@ -30,6 +41,10 @@ pub struct App {
     pub hover: Option<ElementId>,
     /// In-flight canvas drag (move element / resize viewport).
     pub drag: Option<crate::plot_view::DragState>,
+    /// Active canvas tool (toolbar): select / pan / autoscale-to-set.
+    pub tool: Tool,
+    /// In-flight pan gesture.
+    pub pan: Option<crate::plot_view::PanState>,
     /// Element armed for rotation (second click on a rotatable selection).
     pub rotate_armed: Option<ElementId>,
     /// Theme preference (View → Mode); System follows the OS dark/light.
@@ -87,6 +102,8 @@ impl App {
             last_click: None,
             hover: None,
             drag: None,
+            tool: Tool::Select,
+            pan: None,
             rotate_armed: None,
             theme_pref: crate::theme::Pref::System,
             theme: crate::theme::Mode::Dark,
@@ -353,6 +370,100 @@ impl App {
         });
     }
 
+    /// Toggle a modal canvas tool from the toolbar (clicking the active
+    /// tool returns to Select).
+    fn set_tool(&mut self, t: Tool) {
+        self.tool = if self.tool == t { Tool::Select } else { t };
+        self.pan = None;
+    }
+
+    /// Autoscale every graph's world window to its visible sets.
+    fn autoscale_all(&mut self) {
+        if self.project.is_none() {
+            return;
+        }
+        self.apply_edit(Edit::new("autoscale all", (), false, |p, _: ()| {
+            for g in &mut p.graphs {
+                autoscale_graph(g, None);
+            }
+        }));
+        self.status = "Autoscaled all graphs to their visible sets".into();
+    }
+
+    /// Autoscale `graph` to the extents of one set (the autoscale-to-set
+    /// tool), then return to Select.
+    pub fn autoscale_to_set(&mut self, graph: usize, set: usize) {
+        self.apply_edit(Edit::new(
+            "autoscale to set",
+            (graph, set),
+            false,
+            move |p, (g, s)| {
+                if let Some(gr) = p.graphs.get_mut(g) {
+                    autoscale_graph(gr, Some(s));
+                }
+            },
+        ));
+        self.status = format!("Autoscaled graph {graph} to set S{set}");
+        self.tool = Tool::Select;
+    }
+
+    /// The toolbar above the project tree: icon-only buttons that wrap to
+    /// fill the panel width.
+    fn toolbar(&mut self, ui: &mut egui::Ui) {
+        use crate::icons::{icon_button, Icon};
+        let has = self.project.is_some();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+            if icon_button(ui, Icon::Open, "Open… (Ctrl+O)", false).clicked() {
+                crate::file::open_dialog(self);
+            }
+            let save = ui
+                .add_enabled_ui(has, |ui| icon_button(ui, Icon::Save, "Save (Ctrl+S)", false))
+                .inner;
+            if save.clicked() {
+                crate::file::save(self);
+            }
+            let asa = ui
+                .add_enabled_ui(has, |ui| {
+                    icon_button(ui, Icon::AutoscaleAll, "Autoscale all visible sets", false)
+                })
+                .inner;
+            if asa.clicked() {
+                self.autoscale_all();
+            }
+            let ass = ui
+                .add_enabled_ui(has, |ui| {
+                    icon_button(
+                        ui,
+                        Icon::AutoscaleSet,
+                        "Autoscale to a set — then click a set",
+                        self.tool == Tool::PickSet,
+                    )
+                })
+                .inner;
+            if ass.clicked() {
+                self.set_tool(Tool::PickSet);
+            }
+            let pan = ui
+                .add_enabled_ui(has, |ui| {
+                    icon_button(ui, Icon::Pan, "Pan — drag to move the view", self.tool == Tool::Pan)
+                })
+                .inner;
+            if pan.clicked() {
+                self.set_tool(Tool::Pan);
+            }
+            let free = ui
+                .add_enabled_ui(has, |ui| {
+                    icon_button(ui, Icon::FreeAspect, "Free aspect (page fills the window)", self.free_aspect)
+                })
+                .inner;
+            if free.clicked() {
+                self.free_aspect = !self.free_aspect;
+                self.toggle_free_aspect();
+            }
+        });
+    }
+
     /// Toggle free page aspect, remembering / restoring the project's own
     /// page geometry (viewports scale back along with the page).
     fn toggle_free_aspect(&mut self) {
@@ -367,6 +478,49 @@ impl App {
             }
         }
     }
+}
+
+/// Set a graph's world window to the data extents of its sets — all
+/// non-hidden sets when `only` is `None`, otherwise just `only`. Degenerate
+/// ranges are padded so the transform stays finite; no-op without data.
+fn autoscale_graph(g: &mut oxygrace::model::Graph, only: Option<usize>) {
+    let mut xmn = f64::INFINITY;
+    let mut xmx = f64::NEG_INFINITY;
+    let mut ymn = f64::INFINITY;
+    let mut ymx = f64::NEG_INFINITY;
+    for (i, s) in g.sets.iter().enumerate() {
+        match only {
+            Some(o) if i != o => continue,
+            None if s.hidden => continue,
+            _ => {}
+        }
+        if let (Some(xs), Some(ys)) = (s.data.x(), s.data.y()) {
+            for &x in xs {
+                if x.is_finite() {
+                    xmn = xmn.min(x);
+                    xmx = xmx.max(x);
+                }
+            }
+            for &y in ys {
+                if y.is_finite() {
+                    ymn = ymn.min(y);
+                    ymx = ymx.max(y);
+                }
+            }
+        }
+    }
+    if !(xmn.is_finite() && ymn.is_finite()) {
+        return;
+    }
+    if (xmx - xmn).abs() < f64::EPSILON {
+        xmn -= 0.5;
+        xmx += 0.5;
+    }
+    if (ymx - ymn).abs() < f64::EPSILON {
+        ymn -= 0.5;
+        ymx += 0.5;
+    }
+    g.world = oxygrace::model::World { xmin: xmn, xmax: xmx, ymin: ymn, ymax: ymx };
 }
 
 /// Rescale every viewport and view-anchored object from the current page
@@ -513,6 +667,8 @@ impl eframe::App for App {
             .default_size(220.0)
             .size_range(140.0..=380.0)
             .show_inside(ui, |ui| {
+                self.toolbar(ui);
+                ui.separator();
                 ui.heading("Project");
                 ui.separator();
                 match &self.project {

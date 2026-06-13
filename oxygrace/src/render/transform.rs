@@ -301,6 +301,34 @@ impl WorldTransform {
         Some((self.view_to_x(vx)?, self.view_to_y(vy)?))
     }
 
+    /// Pan the world window by a view-space delta (a drag in view units),
+    /// preserving the window width. The shift is computed in *scaled* space
+    /// so logarithmic / reciprocal / logit axes pan uniformly on screen.
+    /// Returns the new `(xmin, xmax, ymin, ymax)`; content follows the drag
+    /// (a positive `dvx` moves the data right). Polar graphs are left
+    /// unchanged.
+    pub fn pan_world(&self, dvx: f64, dvy: f64) -> (f64, f64, f64, f64) {
+        if self.polar {
+            return (self.wxmin, self.wxmax, self.wymin, self.wymax);
+        }
+        let shift = |s0: f64, s1: f64, dv: f64, v0: f64, v1: f64, invert: bool| {
+            let mut f = dv / (v1 - v0);
+            if invert {
+                f = -f;
+            }
+            let w = s1 - s0;
+            (s0 - f * w, s1 - f * w)
+        };
+        let (nx0, nx1) = shift(self.sx0, self.sx1, dvx, self.vx0, self.vx1, self.xinvert);
+        let (ny0, ny1) = shift(self.sy0, self.sy1, dvy, self.vy0, self.vy1, self.yinvert);
+        (
+            scale_inv(self.xscale, nx0).unwrap_or(self.wxmin),
+            scale_inv(self.xscale, nx1).unwrap_or(self.wxmax),
+            scale_inv(self.yscale, ny0).unwrap_or(self.wymin),
+            scale_inv(self.yscale, ny1).unwrap_or(self.wymax),
+        )
+    }
+
     /// Map a world Y value to its view Y coordinate (0 if out of domain,
     /// per Grace `xy_yconv_general`).
     pub fn y_to_view(&self, wy: f64) -> f64 {

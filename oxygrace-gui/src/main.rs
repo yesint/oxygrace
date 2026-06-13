@@ -8,6 +8,7 @@ mod app;
 mod args;
 mod edit;
 mod file;
+mod icons;
 mod inspector;
 mod plot_view;
 mod render;

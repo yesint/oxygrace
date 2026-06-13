@@ -21,6 +21,15 @@ pub enum Handle {
     Se,
 }
 
+/// An in-flight pan gesture: the world transform captured at press time
+/// (each frame re-pans from it by the total delta, so there is no drift).
+#[derive(Clone, Copy)]
+pub struct PanState {
+    graph: usize,
+    start: (f32, f32),
+    orig: WorldTransform,
+}
+
 /// An in-flight canvas drag, anchored at the press position so each frame
 /// recomputes from the original coordinates (no incremental drift).
 #[derive(Clone, Copy)]
@@ -115,10 +124,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         egui::Color32::WHITE,
     );
 
-    // Hover: hit-test under the pointer (~6 screen px of tolerance) and
-    // surface what is there in the status bar — before any click.
     let tol = 6.0 / vm.scale;
     app.hover = None;
+    match app.tool {
+        crate::app::Tool::Select => select_interactions(app, ui, &resp, vm, tol),
+        crate::app::Tool::Pan => handle_pan(app, ui, &resp, vm),
+        crate::app::Tool::PickSet => handle_pick_set(app, ui, &resp, vm, tol),
+    }
+
+    draw_overlay(app, ui, vm);
+}
+
+/// Default-tool interactions: hover status, element drag, click-to-select
+/// (with same-spot cycling and rotate arming).
+fn select_interactions(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap, tol: f32) {
+    // Hover: hit-test under the pointer (~6 screen px of tolerance) and
+    // surface what is there in the status bar — before any click.
     if let Some(pos) = resp.hover_pos() {
         let (dx, dy) = vm.to_device(pos);
         let cands = app
@@ -141,9 +162,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             };
         }
     }
-    handle_drag(app, ui, &resp, vm, tol);
+    handle_drag(app, ui, resp, vm, tol);
 
-    if resp.clicked() && !on_selection_handle(app, &resp, vm) {
+    if resp.clicked() && !on_selection_handle(app, resp, vm) {
         if let Some(pos) = resp.interact_pointer_pos() {
             let (dx, dy) = vm.to_device(pos);
             let cands = app
@@ -191,8 +212,109 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             };
         }
     }
+}
 
-    draw_overlay(app, ui, vm);
+/// Pan tool: drag to shift the world window of the graph under the cursor.
+fn handle_pan(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap) {
+    if app.pan.is_some() {
+        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+    } else if resp.hovered() {
+        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+    }
+    if resp.hover_pos().is_some() && app.pan.is_none() {
+        app.status = "Pan: drag to move the view".into();
+    }
+
+    if resp.drag_started() {
+        app.pan = None;
+        if let (Some(pos), Some(project)) = (resp.interact_pointer_pos(), app.project.as_ref()) {
+            let (dx, dy) = vm.to_device(pos);
+            if let Some(graph) = graph_at(app, dx, dy) {
+                app.pan = Some(PanState {
+                    graph,
+                    start: (dx, dy),
+                    orig: WorldTransform::new(&project.graphs[graph]),
+                });
+            }
+        }
+    }
+    if let Some(pan) = app.pan {
+        if resp.dragged() {
+            if let Some(pos) = resp.interact_pointer_pos() {
+                let (dx, dy) = vm.to_device(pos);
+                let side = app.page_size.0.min(app.page_size.1) as f64;
+                let dvx = (dx - pan.start.0) as f64 / side;
+                let dvy = -((dy - pan.start.1) as f64) / side;
+                let (x0, x1, y0, y1) = pan.orig.pan_world(dvx, dvy);
+                let g = pan.graph;
+                app.apply_edit(Edit::new("pan", (x0, x1, y0, y1), true, move |p, (a, b, c, d)| {
+                    if let Some(gr) = p.graphs.get_mut(g) {
+                        gr.world.xmin = a;
+                        gr.world.xmax = b;
+                        gr.world.ymin = c;
+                        gr.world.ymax = d;
+                    }
+                }));
+                app.status = format!("World {x0:.4} … {x1:.4},  {y0:.4} … {y1:.4}");
+            }
+        }
+        if resp.drag_stopped() {
+            app.pan = None;
+            app.end_gesture();
+        }
+    }
+}
+
+/// Autoscale-to-set tool: click a set to fit its graph to that set.
+fn handle_pick_set(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap, tol: f32) {
+    if resp.hovered() {
+        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Crosshair);
+        app.status = "Click a set to autoscale its graph to it".into();
+    }
+    if resp.clicked() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            let (dx, dy) = vm.to_device(pos);
+            let pick = app
+                .render_info
+                .as_ref()
+                .map(|info| info.hit_candidates(dx, dy, tol))
+                .unwrap_or_default()
+                .into_iter()
+                .find_map(|id| match id {
+                    ElementId::Set { graph, set } => Some((graph, set)),
+                    _ => None,
+                });
+            match pick {
+                Some((g, s)) => {
+                    app.selection = Some(ElementId::Set { graph: g, set: s });
+                    app.autoscale_to_set(g, s);
+                }
+                None => app.status = "No set there — click directly on a set".into(),
+            }
+        }
+    }
+}
+
+/// The graph whose viewport contains device point `(dx, dy)` — topmost
+/// (last-drawn) visible graph wins.
+fn graph_at(app: &App, dx: f32, dy: f32) -> Option<usize> {
+    let project = app.project.as_ref()?;
+    let (pw, ph) = app.page_size;
+    let side = pw.min(ph) as f64;
+    for (i, g) in project.graphs.iter().enumerate().rev() {
+        if g.hidden {
+            continue;
+        }
+        let v = g.view;
+        let x0 = (v.xmin * side) as f32;
+        let x1 = (v.xmax * side) as f32;
+        let y0 = (ph as f64 - v.ymax * side) as f32;
+        let y1 = (ph as f64 - v.ymin * side) as f32;
+        if dx >= x0 && dx <= x1 && dy >= y0 && dy <= y1 {
+            return Some(i);
+        }
+    }
+    None
 }
 
 /// Elements that can be dragged to a new position.

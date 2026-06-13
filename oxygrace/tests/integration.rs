@@ -52,6 +52,41 @@ fn tick_label_formatting() {
 }
 
 #[test]
+fn pan_world_shifts_and_round_trips() {
+    use oxygrace::model::{Graph, ScaleType, World};
+    use oxygrace::render::WorldTransform;
+    // Linear: panning content right (dvx > 0) shifts the window left, by an
+    // amount proportional to the drag fraction of the viewport.
+    let graph = Graph {
+        world: World { xmin: 0.0, xmax: 10.0, ymin: 0.0, ymax: 4.0 },
+        ..Default::default()
+    };
+    let wt = WorldTransform::new(&graph);
+    let v = graph.view; // default 0.15..0.85 in both axes
+    let (x0, x1, _, _) = wt.pan_world(0.1, 0.0);
+    let expected = -0.1 / (v.xmax - v.xmin) * 10.0;
+    assert!((x0 - expected).abs() < 1e-9, "xmin {x0} vs {expected}");
+    assert!(((x1 - x0) - 10.0).abs() < 1e-9, "width preserved");
+
+    // Log axis: pan then pan back returns the original bounds.
+    let logg = Graph {
+        yscale: ScaleType::Logarithmic,
+        world: World { xmin: 0.0, xmax: 10.0, ymin: 1.0, ymax: 1000.0 },
+        ..Default::default()
+    };
+    let wt = WorldTransform::new(&logg);
+    let (_, _, y0, y1) = wt.pan_world(0.0, 0.2);
+    let back = WorldTransform::new(&Graph {
+        yscale: ScaleType::Logarithmic,
+        world: World { xmin: 0.0, xmax: 10.0, ymin: y0, ymax: y1 },
+        ..Default::default()
+    })
+    .pan_world(0.0, -0.2);
+    assert!((back.2 - 1.0).abs() < 1e-6, "ymin back to 1.0, got {}", back.2);
+    assert!((back.3 - 1000.0).abs() < 1e-3, "ymax back to 1000, got {}", back.3);
+}
+
+#[test]
 fn view_to_world_round_trips() {
     use oxygrace::model::{Graph, ScaleType, World};
     use oxygrace::render::WorldTransform;
