@@ -138,15 +138,27 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 /// Default-tool interactions: hover status, element drag, click-to-select
 /// (with same-spot cycling and rotate arming).
 fn select_interactions(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap, tol: f32) {
-    // Hover: hit-test under the pointer (~6 screen px of tolerance) and
-    // surface what is there in the status bar — before any click.
-    if let Some(pos) = resp.hover_pos() {
-        let (dx, dy) = vm.to_device(pos);
-        let cands = app
-            .render_info
-            .as_ref()
-            .map(|info| info.hit_candidates(dx, dy, tol))
-            .unwrap_or_default();
+    // One hit-test per frame, at the interact position while pressed or
+    // clicked (else the hover position — same pointer, same coordinates):
+    // the hover preview, the click pick and the drag target all see the
+    // same candidate list and cannot disagree.
+    let pointer = resp.interact_pointer_pos().or_else(|| resp.hover_pos());
+    let (dev, cands) = match pointer {
+        Some(pos) => {
+            let dev = vm.to_device(pos);
+            let cands = app
+                .render_info
+                .as_ref()
+                .map(|info| info.hit_candidates(dev.0, dev.1, tol))
+                .unwrap_or_default();
+            (dev, cands)
+        }
+        None => ((0.0, 0.0), Vec::new()),
+    };
+
+    // Hover: surface what is under the pointer in the status bar — before
+    // any click (~6 screen px of tolerance).
+    if resp.hover_pos().is_some() {
         app.hover = cands.first().copied();
         if app.drag.is_none() {
             app.status = match cands.first() {
@@ -158,59 +170,54 @@ fn select_interactions(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: 
                         d
                     }
                 }
-                None => format!("({dx:.0}, {dy:.0}) px"),
+                None => format!("({:.0}, {:.0}) px", dev.0, dev.1),
             };
         }
     }
-    handle_drag(app, ui, resp, vm, tol);
+    handle_drag(app, ui, resp, vm, &cands);
 
-    if resp.clicked() && !on_selection_handle(app, resp, vm) {
-        if let Some(pos) = resp.interact_pointer_pos() {
-            let (dx, dy) = vm.to_device(pos);
-            let cands = app
-                .render_info
-                .as_ref()
-                .map(|info| info.hit_candidates(dx, dy, tol))
-                .unwrap_or_default();
-            // Clicking the same spot again cycles through overlapping
-            // elements (frame under plot area, axis under frame, …).
-            let same_spot = app.last_click.is_some_and(|(lx, ly)| {
-                (lx - dx).hypot(ly - dy) * vm.scale < 6.0
-            });
-            let pick = match app
-                .selection
-                .filter(|_| same_spot)
-                .and_then(|s| cands.iter().position(|&c| c == s))
-            {
-                // Second click on a rotatable selection toggles rotate mode
-                // instead of cycling.
-                Some(_) if app.selection.is_some_and(rotatable) => {
-                    let sel = app.selection.unwrap();
-                    app.rotate_armed =
-                        if app.rotate_armed == Some(sel) { None } else { Some(sel) };
-                    Some(sel)
-                }
-                Some(i) if !cands.is_empty() => Some(cands[(i + 1) % cands.len()]),
-                _ => cands.first().copied(),
-            };
-            if pick != app.selection {
-                app.rotate_armed = None;
+    if resp.clicked()
+        && !on_selection_handle(app, resp, vm)
+        && resp.interact_pointer_pos().is_some()
+    {
+        let (dx, dy) = dev;
+        // Clicking the same spot again cycles through overlapping
+        // elements (frame under plot area, axis under frame, …).
+        let same_spot = app
+            .last_click
+            .is_some_and(|(lx, ly)| (lx - dx).hypot(ly - dy) * vm.scale < 6.0);
+        let pick = match app
+            .selection
+            .filter(|_| same_spot)
+            .and_then(|s| cands.iter().position(|&c| c == s))
+        {
+            // Second click on a rotatable selection toggles rotate mode
+            // instead of cycling.
+            Some(_) if app.selection.is_some_and(rotatable) => {
+                let sel = app.selection.unwrap();
+                app.rotate_armed = if app.rotate_armed == Some(sel) { None } else { Some(sel) };
+                Some(sel)
             }
-            app.selection = pick;
-            app.refocus = true;
-            app.last_click = Some((dx, dy));
-            app.status = match pick {
-                Some(id) => {
-                    let d = crate::tree::describe(app.project.as_ref(), id);
-                    if cands.len() > 1 {
-                        format!("{d}   ({} overlapping — click again to cycle)", cands.len())
-                    } else {
-                        d
-                    }
-                }
-                None => "No selection".into(),
-            };
+            Some(i) if !cands.is_empty() => Some(cands[(i + 1) % cands.len()]),
+            _ => cands.first().copied(),
+        };
+        if pick != app.selection {
+            app.rotate_armed = None;
         }
+        app.selection = pick;
+        app.refocus = true;
+        app.last_click = Some((dx, dy));
+        app.status = match pick {
+            Some(id) => {
+                let d = crate::tree::describe(app.project.as_ref(), id);
+                if cands.len() > 1 {
+                    format!("{d}   ({} overlapping — click again to cycle)", cands.len())
+                } else {
+                    d
+                }
+            }
+            None => "No selection".into(),
+        };
     }
 }
 
@@ -460,8 +467,9 @@ fn cursor_for(h: Handle) -> egui::CursorIcon {
 
 /// Drag interactions: start on press (handle-resize first, then a move of a
 /// draggable element under the pointer), update with coalescing edits while
-/// dragging, end the undo gesture on release.
-fn handle_drag(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap, tol: f32) {
+/// dragging, end the undo gesture on release. `cands` is the frame's shared
+/// hit-candidate list (computed once in [`select_interactions`]).
+fn handle_drag(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap, cands: &[ElementId]) {
     // Cursor feedback.
     if app.drag.is_some() {
         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
@@ -539,11 +547,6 @@ fn handle_drag(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap,
         }
         // Otherwise move a draggable element under the pointer (preferring
         // the current selection so drags don't jump to occluders).
-        let cands = app
-            .render_info
-            .as_ref()
-            .map(|info| info.hit_candidates(dev.0, dev.1, tol))
-            .unwrap_or_default();
         let target = app
             .selection
             .filter(|s| draggable(*s) && cands.contains(s))
