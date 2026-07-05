@@ -92,6 +92,8 @@ oxygrace/src/
   text.rs            Grace string markup parser + glyph layout
   parse.rs + parse/  grammar.rs (peg), reader.rs (line loop + apply), data.rs (rows)
   write.rs           .agr writer (inverse of reader's apply; emits @version 50122)
+  format.rs + format/ the native .oxgr format (RON + serde): v1.rs schema
+                     mirror structs, datasets as raw-string row blocks
   import.rs          plain-data import (-xy/-nxy/-type) + autoscale_world
   render.rs + render/ canvas.rs (shared device primitives + raster backend),
                      svg.rs (SVG backend), transform.rs (coords + inverses),
@@ -269,6 +271,27 @@ backend enum — raster (tiny-skia) and SVG writer — both fed identical
 device-space geometry, so the SVG matches the PNG pixel-for-pixel
 (validated by rasterizing with Chromium and diffing). Text is emitted
 as glyph outline paths.
+
+**Native `.oxgr` format (v1 slice, in progress):** a single RON document —
+serde-derived schema structs in `oxygrace/src/format/v1.rs`, *deliberately
+decoupled from the model* (mirror structs + From/Into) so internal
+refactors don't break files. Datasets stay inline as `.agr`-style
+whitespace rows inside RON raw/multiline strings (`escape_strings(false)`
+emits them readably; delimiters auto-escalate on collision, verified).
+Writing omits baseline-default values; reading fills omissions from the
+same baselines (lossless omit-default). Unknown fields are skipped →
+forward compatible; `format: 1` gates revisions; `implicit_some` is
+enabled so optional sections read/write without `Some(...)`; `None` enum
+variants are spelled `Off` in files (avoids RON's `r#None`).
+`oxygrace::load`/`save` dispatch on the `.oxgr` extension (strict errors
+with positions, unlike the tolerant `.agr` reader); GUI dialogs and
+`args.rs` accept it; web open dispatches too. Covered so far: page,
+color overrides, graph kind/world/view/scales/titles, axes (label + tick
+basics + sides), sets (line/symbol/fill styling incl. opacities) + data.
+Not yet: legend, frame, objects, errbars, avalues, fonts, defaults —
+`.agr` remains the full-fidelity interchange format. Tests in
+`oxygrace/tests/oxgr.rs` (sample parse, render-equality round trip,
+unknown-field tolerance, heredoc collision, version gate).
 
 **Alpha channels (QtGrace extension):** per-set pen opacities ride in
 `#QTGRACE_ADDITIONAL_PARAMETER: G n S m ALPHA_CHANNELS

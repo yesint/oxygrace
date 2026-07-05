@@ -16,6 +16,7 @@ pub mod color;
 pub mod dates;
 pub mod draw;
 pub mod font;
+pub mod format;
 pub mod import;
 pub mod model;
 pub mod parse;
@@ -31,18 +32,42 @@ pub use render::{Bounds, ElementId, OverlayShape, RenderInfo};
 // separate (potentially version-skewed) tiny-skia dependency.
 pub use tiny_skia;
 
-/// Parse a `.agr`/`.xvg` file from disk into a [`Project`].
+/// True when a path carries the native `.oxgr` extension.
+fn is_oxgr(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("oxgr"))
+}
+
+/// Parse a project file from disk into a [`Project`], dispatching on the
+/// extension: `.oxgr` is the native format (strict, errors report a
+/// position), everything else parses as tolerant `.agr`/`.xvg`.
 ///
-/// The file is decoded as UTF-8 when valid; otherwise it is decoded as
-/// Latin-1 (every byte maps to the same code point), which is what
-/// Grace-era files use for characters like the degree sign.
+/// `.agr` bytes are decoded as UTF-8 when valid; otherwise as Latin-1
+/// (every byte maps to the same code point), which is what Grace-era
+/// files use for characters like the degree sign.
 pub fn load<P: AsRef<Path>>(path: P) -> std::io::Result<Project> {
+    let path = path.as_ref();
     let bytes = std::fs::read(path)?;
     let content = match std::str::from_utf8(&bytes) {
         Ok(s) => s.to_string(),
         Err(_) => bytes.iter().map(|&b| b as char).collect(),
     };
-    Ok(load_str(&content))
+    if is_oxgr(path) {
+        format::load_oxgr_str(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
+    } else {
+        Ok(load_str(&content))
+    }
+}
+
+/// Serialize a project to disk, dispatching on the extension: `.oxgr`
+/// writes the native format, everything else writes Grace `.agr`.
+pub fn save<P: AsRef<Path>>(project: &Project, path: P) -> std::io::Result<()> {
+    let path = path.as_ref();
+    if is_oxgr(path) {
+        std::fs::write(path, format::save_oxgr_str(project))
+    } else {
+        write::save(project, path)
+    }
 }
 
 /// Parse `.agr`/`.xvg` text into a [`Project`].
@@ -80,4 +105,4 @@ pub fn render_svg(project: &Project) -> String {
     draw::draw_project_svg(project, &fonts)
 }
 
-pub use write::{save, save_str};
+pub use write::save_str;

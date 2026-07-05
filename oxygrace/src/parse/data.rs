@@ -25,11 +25,12 @@ pub fn parse_row(line: &str) -> Option<(Vec<f64>, Option<String>)> {
         return None;
     }
     // A trailing double-quoted token is the point's annotation string
-    // (Grace data column `s`, used by avalue type 4).
+    // (Grace data column `s`, used by avalue type 4). Embedded quotes are
+    // written escaped (`\"`, like Grace's writer) — undo that here.
     let rest = rest.trim();
     let s = rest
         .strip_prefix('"')
         .and_then(|r| r.strip_suffix('"'))
-        .map(|r| r.to_string());
+        .map(|r| r.replace("\\\"", "\""));
     Some((cols, s))
 }

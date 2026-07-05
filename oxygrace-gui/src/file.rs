@@ -10,8 +10,10 @@ use crate::app::App;
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_dialog(app: &mut App) {
     let dialog = rfd::FileDialog::new()
+        .add_filter("Plot projects", &["agr", "oxgr", "xvg", "dat"])
         .add_filter("Grace project", &["agr", "xvg", "dat"])
-        .set_title("Open Grace project");
+        .add_filter("Oxygrace project", &["oxgr"])
+        .set_title("Open plot project");
     if let Some(path) = dialog.pick_file() {
         open_path(app, path);
     }
@@ -34,7 +36,7 @@ pub fn open_dialog(app: &mut App) {
         .dyn_into()
         .unwrap();
     input.set_type("file");
-    input.set_accept(".agr,.xvg,.dat");
+    input.set_accept(".agr,.oxgr,.xvg,.dat");
 
     // The `change` handler keeps the input alive (it captures a clone), and
     // `once_into_js` keeps the closure alive until it fires once.
@@ -65,10 +67,21 @@ pub fn open_dialog(app: &mut App) {
     input.click();
 }
 
-/// Install a file delivered by the async picker (web).
+/// Install a file delivered by the async picker (web), dispatching on the
+/// extension like the native `oxygrace::load`.
 #[cfg(target_arch = "wasm32")]
 pub fn open_loaded(app: &mut App, name: String, content: String) {
-    let project = oxygrace::load_str(&content);
+    let project = if name.to_ascii_lowercase().ends_with(".oxgr") {
+        match oxygrace::format::load_oxgr_str(&content) {
+            Ok(p) => p,
+            Err(e) => {
+                app.status = format!("Failed to open {name}: {e}");
+                return;
+            }
+        }
+    } else {
+        oxygrace::load_str(&content)
+    };
     app.status = format!(
         "Loaded {name} ({} graph{})",
         project.graphs.len(),
@@ -112,9 +125,12 @@ pub fn save_as(app: &mut App) {
     if app.project.is_none() {
         return;
     }
+    // The extension picks the format (core `save` dispatches): .agr stays
+    // the default; choosing .oxgr writes the native format.
     let mut dialog = rfd::FileDialog::new()
         .add_filter("Grace project", &["agr"])
-        .set_title("Save Grace project");
+        .add_filter("Oxygrace project", &["oxgr"])
+        .set_title("Save plot project");
     if let Some(parent) = app.path.as_ref().and_then(|p| p.parent()) {
         dialog = dialog.set_directory(parent);
     }

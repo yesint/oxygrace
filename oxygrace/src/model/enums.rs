@@ -5,7 +5,9 @@
 //! integer codes appearing in `.agr` files map directly onto these variants.
 
 /// Kind of graph. Only [`GraphType::Xy`] is rendered in milestone 1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum GraphType {
     #[default]
     Xy,
@@ -18,7 +20,7 @@ pub enum GraphType {
 }
 
 /// Dataset column layout. The discriminant matches Grace's `SetType`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SetType {
     #[default]
     Xy,
@@ -86,7 +88,7 @@ impl SetType {
 }
 
 /// Axis scale mapping. Only [`ScaleType::Normal`] is rendered in milestone 1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ScaleType {
     #[default]
     Normal,
@@ -96,9 +98,10 @@ pub enum ScaleType {
 }
 
 /// Plot symbol kind (`s<n> symbol <code>`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SymbolType {
     #[default]
+    #[serde(rename = "Off")]
     None,
     Circle,
     Square,
@@ -135,8 +138,9 @@ impl SymbolType {
 }
 
 /// How successive data points are connected (`s<n> line type <code>`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum LineType {
+    #[serde(rename = "Off")]
     None,
     #[default]
     Straight,
@@ -167,9 +171,10 @@ impl LineType {
 }
 
 /// Set fill mode (`s<n> fill type <code>`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum FillType {
     #[default]
+    #[serde(rename = "Off")]
     None,
     Polygon,
     Baseline,
@@ -241,7 +246,7 @@ impl TickFormat {
 }
 
 /// Where ticks / labels are placed relative to the axis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Placement {
     #[default]
     Normal,

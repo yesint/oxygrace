@@ -64,7 +64,9 @@ pub fn parse(args: impl Iterator<Item = String>) -> Launch {
             file => {
                 let is_project = std::path::Path::new(file)
                     .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("agr"));
+                    .is_some_and(|e| {
+                        e.eq_ignore_ascii_case("agr") || e.eq_ignore_ascii_case("oxgr")
+                    });
                 if is_project {
                     match oxygrace::load(file) {
                         Ok(p) => {

@@ -74,12 +74,12 @@ pub fn save<P: AsRef<Path>>(project: &Project, path: P) -> std::io::Result<()> {
 }
 
 /// Shortest round-trip decimal form of a float (Rust's `Display` is lossless).
-fn n(v: f64) -> String {
+pub(crate) fn n(v: f64) -> String {
     format!("{v}")
 }
 
 /// Quote a string, escaping embedded double quotes like Grace's writer.
-fn q(s: &str) -> String {
+pub(crate) fn q(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\\\""))
 }
 
