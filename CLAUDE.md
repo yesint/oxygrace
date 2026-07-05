@@ -304,9 +304,13 @@ core writer, modified flag in the window title, confirm-on-close modal.
 UX refinements: sub-elements (title, tick labels…) share their parent's
 page with the clicked section force-expanded (App.refocus flag); shape-based
 selection highlight via `RenderInfo::shapes_of` (clip-aware); `hit_candidates`
-+ same-spot click cycling reaches occluded elements (axis promoted over
-coincident frame; explicit click-regions like the plot area always lose to
-drawn ink; grid lines muted from recording entirely); swatch-grid color &
++ same-spot click cycling reaches occluded elements — candidates are *scored*
+(visible-over-occluded, then ink > fill > click-region, then distance to ink,
+then smaller ink area, then draw order), so an exact hit on a curve beats a
+nearby fill edge, an axis edge beats the coincident frame outline, and the
+plot-area region never shadows drawn ink; opaque fills occlude ink below
+them (demoted, still cyclable); grid lines muted from recording entirely;
+swatch-grid color &
 pattern pickers; −/+ spin buttons; tree scrolls both ways so panels shrink
 freely; frame merged into the plot-area page.
 

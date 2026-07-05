@@ -97,6 +97,10 @@ struct ElementRecord {
     shape: RecordShape,
     /// Precomputed bbox of `shape` for the hit-test pre-filter.
     bbox: Bounds,
+    /// Approximate on-screen ink area of `shape` in px² — the hit-test
+    /// specificity tiebreak (at equal class and distance the smaller,
+    /// more specific element wins).
+    area: f32,
     /// Clip rectangle active when the primitive was drawn: a clipped-away
     /// part of a curve must not hit-test outside the graph viewport.
     clip: Option<Bounds>,
@@ -119,60 +123,107 @@ impl RenderInfo {
     }
 
     /// Every element under device point `(x, y)` (with `tol` pixels of
-    /// slack), deduplicated, ordered top-down by draw order — with two
-    /// adjustments matching what a user means by "what I clicked":
-    /// drawn ink always beats explicit click-regions (the plot-area
-    /// rectangle never shadows an axis or a curve), and an axis bar is
-    /// promoted above the frame border it usually coincides with. A GUI can
-    /// cycle through the list on repeated clicks to reach occluded elements.
+    /// slack), deduplicated, ordered by how directly the click lands on
+    /// each one. A GUI can cycle through the list on repeated clicks to
+    /// reach the elements ranked lower.
+    ///
+    /// Candidates are scored, not just draw-ordered:
+    /// 1. visible elements before ones hidden under an opaque fill drawn
+    ///    over them (all Grace fills paint fg-on-bg, so any fill polygon
+    ///    containing the point occludes everything below it);
+    /// 2. by class — ink you are directly on (strokes, text, symbols),
+    ///    then fills you are inside (or near the edge of), then explicit
+    ///    click-regions (the plot area rectangle never shadows a curve);
+    /// 3. by distance to the ink (being *on* an element beats being within
+    ///    tolerance of it);
+    /// 4. by ink area — the smaller, more specific element wins a tie (a
+    ///    coincident axis edge beats the whole frame outline);
+    /// 5. topmost draw order last, as the final tiebreak.
     pub fn hit_candidates(&self, x: f32, y: f32, tol: f32) -> Vec<ElementId> {
-        let mut ink: Vec<ElementId> = Vec::new();
-        let mut regions: Vec<ElementId> = Vec::new();
-        for r in self.records.iter().rev() {
-            if ink.contains(&r.id) || regions.contains(&r.id) {
-                continue;
-            }
+        struct Cand {
+            id: ElementId,
+            occluded: bool,
+            /// 0 = direct ink, 1 = fill, 2 = click-region.
+            class: u8,
+            /// Distance to the ink, quantized to whole pixels so the area
+            /// tiebreak still applies to "essentially equal" distances.
+            dist_px: i32,
+            area: f32,
+            order: usize,
+        }
+        let mut cands: Vec<Cand> = Vec::new();
+        // Top-down: newest (topmost) record first, tracking when an opaque
+        // fill has covered the point — everything drawn below it is
+        // invisible there and ranks behind (still reachable by cycling).
+        let mut covered = false;
+        for (order, r) in self.records.iter().enumerate().rev() {
             if let Some(clip) = &r.clip {
                 if !clip.contains(x, y, 0.0) {
                     continue;
                 }
             }
-            if !r.bbox.contains(x, y, tol) {
+            // Pre-filter: a stroke's ink extends half_width beyond the bbox
+            // of its centerline points.
+            let slack = match &r.shape {
+                RecordShape::Polyline { half_width, .. } => half_width + tol,
+                _ => tol,
+            };
+            if !r.bbox.contains(x, y, slack) {
                 continue;
             }
+            // (class, distance to visible ink); `None` = no hit.
+            let mut inside_fill = false;
             let hit = match &r.shape {
-                RecordShape::Rect(b) => b.contains(x, y, tol),
+                RecordShape::Rect(b) => {
+                    let d = dist_to_rect(b, x, y);
+                    (d <= tol).then_some((0u8, d))
+                }
                 RecordShape::Polygon(pts) => {
-                    point_in_polygon(pts, x, y) || near_polyline(pts, x, y, tol, true)
+                    if point_in_polygon(pts, x, y) {
+                        inside_fill = !r.region;
+                        Some((1u8, 0.0))
+                    } else {
+                        let d = dist_to_polyline(pts, x, y, true);
+                        (d <= tol).then_some((1u8, d))
+                    }
                 }
                 RecordShape::Polyline { pts, half_width } => {
-                    near_polyline(pts, x, y, half_width.max(tol), false)
+                    let d = (dist_to_polyline(pts, x, y, false) - half_width).max(0.0);
+                    (d <= tol).then_some((0u8, d))
                 }
             };
-            if hit {
-                if r.region {
-                    regions.push(r.id);
-                } else {
-                    ink.push(r.id);
-                }
+            if let Some((class, dist)) = hit {
+                cands.push(Cand {
+                    id: r.id,
+                    occluded: covered,
+                    class: if r.region { 2 } else { class },
+                    dist_px: dist.round() as i32,
+                    area: r.area,
+                    order,
+                });
+            }
+            // The covering fill itself was pushed with the *previous* state,
+            // so it stays visible; only records below it are occluded.
+            if inside_fill {
+                covered = true;
             }
         }
-        // Promote the first axis bar above a leading frame hit.
-        if let Some(axis_pos) = ink
-            .iter()
-            .position(|id| matches!(id, ElementId::AxisBar { .. }))
-        {
-            if axis_pos > 0 && ink[..axis_pos].iter().all(|id| matches!(id, ElementId::Frame(_))) {
-                ink[..=axis_pos].rotate_right(1);
+        cands.sort_by(|a, b| {
+            a.occluded
+                .cmp(&b.occluded)
+                .then(a.class.cmp(&b.class))
+                .then(a.dist_px.cmp(&b.dist_px))
+                .then(a.area.total_cmp(&b.area))
+                .then(b.order.cmp(&a.order))
+        });
+        // Best-scoring record per element (the list is sorted best-first).
+        let mut out: Vec<ElementId> = Vec::new();
+        for c in cands {
+            if !out.contains(&c.id) {
+                out.push(c.id);
             }
         }
-        // Regions last; drop region entries whose id already hit as ink.
-        for id in regions {
-            if !ink.contains(&id) {
-                ink.push(id);
-            }
-        }
-        ink
+        out
     }
 
     /// The recorded device-space geometry of an element, in draw order, with
@@ -286,7 +337,10 @@ impl Recorder {
                 }
             }
         };
-        self.info.records.push(ElementRecord { id, shape, bbox, clip: self.clip, region });
+        let area = ink_area(&shape);
+        self.info
+            .records
+            .push(ElementRecord { id, shape, bbox, area, clip: self.clip, region });
     }
 
     pub(crate) fn finish(mut self) -> RenderInfo {
@@ -315,27 +369,64 @@ fn point_in_polygon(pts: &[(f32, f32)], x: f32, y: f32) -> bool {
     inside
 }
 
-/// True when `(x, y)` lies within `dist` of any segment of the polyline
+/// Distance from `(x, y)` to the nearest segment of the polyline
 /// (`closed` adds the last→first segment).
-fn near_polyline(pts: &[(f32, f32)], x: f32, y: f32, dist: f32, closed: bool) -> bool {
-    let d2 = dist * dist;
+fn dist_to_polyline(pts: &[(f32, f32)], x: f32, y: f32, closed: bool) -> f32 {
     let n = pts.len();
     if n == 0 {
-        return false;
+        return f32::INFINITY;
     }
     if n == 1 {
-        let (dx, dy) = (x - pts[0].0, y - pts[0].1);
-        return dx * dx + dy * dy <= d2;
+        return (x - pts[0].0).hypot(y - pts[0].1);
     }
     let last = if closed { n } else { n - 1 };
+    let mut best = f32::INFINITY;
     for i in 0..last {
         let (x1, y1) = pts[i];
         let (x2, y2) = pts[(i + 1) % n];
-        if dist2_to_segment(x, y, x1, y1, x2, y2) <= d2 {
-            return true;
+        best = best.min(dist2_to_segment(x, y, x1, y1, x2, y2));
+    }
+    best.sqrt()
+}
+
+/// Distance from `(x, y)` to an axis-aligned rect (0 inside).
+fn dist_to_rect(b: &Bounds, x: f32, y: f32) -> f32 {
+    let dx = (b.x0 - x).max(x - b.x1).max(0.0);
+    let dy = (b.y0 - y).max(y - b.y1).max(0.0);
+    dx.hypot(dy)
+}
+
+/// Approximate on-screen ink area of a shape in px², floored to 1 so
+/// degenerate shapes get no unfair specificity advantage.
+fn ink_area(shape: &RecordShape) -> f32 {
+    match shape {
+        RecordShape::Rect(b) => ((b.x1 - b.x0) * (b.y1 - b.y0)).max(1.0),
+        RecordShape::Polygon(pts) => polygon_area(pts).max(1.0),
+        RecordShape::Polyline { pts, half_width } => {
+            (polyline_len(pts) * (2.0 * half_width).max(1.0)).max(1.0)
         }
     }
-    false
+}
+
+/// Shoelace polygon area (absolute).
+fn polygon_area(pts: &[(f32, f32)]) -> f32 {
+    let n = pts.len();
+    if n < 3 {
+        return 0.0;
+    }
+    let mut sum = 0.0f32;
+    let mut j = n - 1;
+    for i in 0..n {
+        sum += (pts[j].0 + pts[i].0) * (pts[j].1 - pts[i].1);
+        j = i;
+    }
+    (sum / 2.0).abs()
+}
+
+fn polyline_len(pts: &[(f32, f32)]) -> f32 {
+    pts.windows(2)
+        .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+        .sum()
 }
 
 /// Squared distance from a point to a segment.
@@ -362,9 +453,117 @@ mod tests {
     #[test]
     fn polyline_distance() {
         let line = vec![(0.0, 0.0), (10.0, 0.0)];
-        assert!(near_polyline(&line, 5.0, 1.5, 2.0, false));
-        assert!(!near_polyline(&line, 5.0, 3.0, 2.0, false));
-        assert!(!near_polyline(&line, 13.0, 0.0, 2.0, false));
+        assert!((dist_to_polyline(&line, 5.0, 1.5, false) - 1.5).abs() < 1e-4);
+        assert!((dist_to_polyline(&line, 13.0, 0.0, false) - 3.0).abs() < 1e-4);
+        assert_eq!(dist_to_polyline(&line, 5.0, 0.0, false), 0.0);
+    }
+
+    /// A fill drawn over an earlier stroke occludes it: inside the fill the
+    /// fill ranks first and the hidden stroke stays reachable by cycling;
+    /// on the stroke's visible part the stroke wins.
+    #[test]
+    fn opaque_fill_occludes_earlier_stroke() {
+        let s0 = ElementId::Set { graph: 0, set: 0 };
+        let s1 = ElementId::Set { graph: 0, set: 1 };
+        let mut rec = Recorder::default();
+        rec.push(s0);
+        rec.record(RecordShape::Polyline {
+            pts: vec![(0.0, 20.0), (100.0, 20.0)],
+            half_width: 1.0,
+        });
+        rec.pop();
+        // Set 1's opaque fill covers x 40..100 (drawn later).
+        rec.push(s1);
+        rec.record(RecordShape::Polygon(vec![
+            (40.0, 0.0),
+            (100.0, 0.0),
+            (100.0, 40.0),
+            (40.0, 40.0),
+        ]));
+        rec.pop();
+        let info = rec.finish();
+        // Visible part of the line.
+        assert_eq!(info.hit_test(20.0, 20.0, 3.0), Some(s0));
+        // Inside the fill: the fill first, the covered line second.
+        assert_eq!(info.hit_candidates(70.0, 20.0, 3.0), vec![s1, s0]);
+    }
+
+    /// Being exactly ON a stroke beats being merely NEAR a fill's edge,
+    /// even when the fill was drawn later.
+    #[test]
+    fn exact_stroke_beats_near_fill_edge() {
+        let set = ElementId::Set { graph: 0, set: 0 };
+        let bx = ElementId::BoxObj(0);
+        let mut rec = Recorder::default();
+        rec.push(set);
+        rec.record(RecordShape::Polyline {
+            pts: vec![(0.0, 20.0), (100.0, 20.0)],
+            half_width: 0.5,
+        });
+        rec.pop();
+        // A filled box drawn later, its top edge 5px below the line.
+        rec.push(bx);
+        rec.record(RecordShape::Polygon(vec![
+            (0.0, 25.0),
+            (100.0, 25.0),
+            (100.0, 60.0),
+            (0.0, 60.0),
+        ]));
+        rec.pop();
+        let info = rec.finish();
+        let c = info.hit_candidates(50.0, 20.0, 6.0);
+        assert_eq!(c[0], set, "exact stroke hit must outrank a nearby fill edge");
+        assert!(c.contains(&bx), "the box stays reachable by cycling");
+        // In the middle of the box, away from the line: the box wins.
+        assert_eq!(info.hit_test(50.0, 45.0, 6.0), Some(bx));
+    }
+
+    /// Coincident strokes: the shorter (more specific) ink wins the tie —
+    /// an axis edge over the whole frame outline it lies on.
+    #[test]
+    fn smaller_ink_wins_coincident_strokes() {
+        let axis = ElementId::AxisBar { graph: 0, axis: 0 };
+        let frame = ElementId::Frame(0);
+        let mut rec = Recorder::default();
+        // Axis edge along the bottom, then the frame outline drawn on top.
+        rec.push(axis);
+        rec.record(RecordShape::Polyline {
+            pts: vec![(0.0, 100.0), (100.0, 100.0)],
+            half_width: 0.7,
+        });
+        rec.pop();
+        rec.push(frame);
+        rec.record(RecordShape::Polyline {
+            pts: vec![
+                (0.0, 0.0),
+                (100.0, 0.0),
+                (100.0, 100.0),
+                (0.0, 100.0),
+                (0.0, 0.0),
+            ],
+            half_width: 0.7,
+        });
+        rec.pop();
+        let info = rec.finish();
+        assert_eq!(info.hit_candidates(50.0, 100.0, 3.0), vec![axis, frame]);
+    }
+
+    /// A thick stroke's ink extends beyond its centerline bbox: clicks on
+    /// that ink must hit even with a tolerance smaller than the width
+    /// (the bbox pre-filter must use half_width + tol).
+    #[test]
+    fn thick_stroke_hits_beyond_centerline_bbox() {
+        let set = ElementId::Set { graph: 0, set: 0 };
+        let mut rec = Recorder::default();
+        rec.push(set);
+        rec.record(RecordShape::Polyline {
+            pts: vec![(10.0, 50.0), (90.0, 50.0)],
+            half_width: 8.0,
+        });
+        rec.pop();
+        let info = rec.finish();
+        // 6px above the centerline start: on the ink (half_width 8), tol 1.
+        assert_eq!(info.hit_test(10.0, 44.0, 1.0), Some(set));
     }
 
     #[test]
