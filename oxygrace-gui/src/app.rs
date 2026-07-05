@@ -384,7 +384,7 @@ impl App {
         }
         self.apply_edit(Edit::new("autoscale all", (), false, |p, _: ()| {
             for g in &mut p.graphs {
-                autoscale_graph(g, None);
+                oxygrace::import::autoscale_world_filtered(g, |_, s| !s.hidden);
             }
         }));
         self.status = "Autoscaled all graphs to their visible sets".into();
@@ -399,7 +399,7 @@ impl App {
             false,
             move |p, (g, s)| {
                 if let Some(gr) = p.graphs.get_mut(g) {
-                    autoscale_graph(gr, Some(s));
+                    oxygrace::import::autoscale_world_filtered(gr, move |i, _| i == s);
                 }
             },
         ));
@@ -515,49 +515,6 @@ impl App {
             _ => Some(std::borrow::Cow::Borrowed(p)),
         }
     }
-}
-
-/// Set a graph's world window to the data extents of its sets — all
-/// non-hidden sets when `only` is `None`, otherwise just `only`. Degenerate
-/// ranges are padded so the transform stays finite; no-op without data.
-fn autoscale_graph(g: &mut oxygrace::model::Graph, only: Option<usize>) {
-    let mut xmn = f64::INFINITY;
-    let mut xmx = f64::NEG_INFINITY;
-    let mut ymn = f64::INFINITY;
-    let mut ymx = f64::NEG_INFINITY;
-    for (i, s) in g.sets.iter().enumerate() {
-        match only {
-            Some(o) if i != o => continue,
-            None if s.hidden => continue,
-            _ => {}
-        }
-        if let (Some(xs), Some(ys)) = (s.data.x(), s.data.y()) {
-            for &x in xs {
-                if x.is_finite() {
-                    xmn = xmn.min(x);
-                    xmx = xmx.max(x);
-                }
-            }
-            for &y in ys {
-                if y.is_finite() {
-                    ymn = ymn.min(y);
-                    ymx = ymx.max(y);
-                }
-            }
-        }
-    }
-    if !(xmn.is_finite() && ymn.is_finite()) {
-        return;
-    }
-    if (xmx - xmn).abs() < f64::EPSILON {
-        xmn -= 0.5;
-        xmx += 0.5;
-    }
-    if (ymx - ymn).abs() < f64::EPSILON {
-        ymn -= 0.5;
-        ymx += 0.5;
-    }
-    g.world = oxygrace::model::World { xmin: xmn, xmax: xmx, ymin: ymn, ymax: ymx };
 }
 
 /// Rescale every viewport and view-anchored object from the current page

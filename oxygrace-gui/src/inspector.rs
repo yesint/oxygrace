@@ -19,6 +19,9 @@ use crate::edit::Edit;
 /// Placement side options shared by several pages.
 pub const SIDE_OPTS: [(i32, &str); 3] = [(0, "Normal"), (1, "Opposite"), (2, "Both")];
 
+/// View/world coordinate anchoring options (objects, legend).
+pub const LOCTYPE_OPTS: [(bool, &str); 2] = [(true, "View"), (false, "World")];
+
 /// `focus_changed` is true on the frame the selection changed: pages then
 /// force-expand the section matching the clicked sub-element and fold the
 /// rest (afterwards the user can open/close sections freely).

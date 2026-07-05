@@ -3,9 +3,7 @@
 use oxygrace::Project;
 
 use crate::edit::Edit;
-use crate::inspector::rows;
-
-const LOCTYPE_OPTS: [(bool, &str); 2] = [(true, "View"), (false, "World")];
+use crate::inspector::{rows, LOCTYPE_OPTS};
 
 /// Grace justification bits: h = just & 3, v = just & 12 (`draw.h`).
 const JUST_OPTS: [(i32, &str); 12] = [

@@ -3,9 +3,7 @@
 use oxygrace::Project;
 
 use crate::edit::Edit;
-use crate::inspector::rows;
-
-const LOCTYPE_OPTS: [(bool, &str); 2] = [(true, "View"), (false, "World")];
+use crate::inspector::{rows, LOCTYPE_OPTS};
 
 pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, edits: &mut Vec<Edit>) {
     let Some(l) = project.graphs.get(g).map(|gr| &gr.legend) else {

@@ -788,17 +788,27 @@ fn m4_decimate(pts: &[(f32, f32)]) -> Vec<(f32, f32)> {
 /// multiple of the line width (as in Qt's `setDashPattern`), so we scale by the
 /// device line width. Style 0 = none, 1 = solid (both `None` here; style 0 is
 /// skipped by the caller).
+/// Grace's nine line-style dash patterns (`patterns.h`), as on/off run
+/// lengths in multiples of the line width, indexed by line style. Styles
+/// 0 (none) and 1 (solid) have no pattern. Public so UIs can render
+/// faithful line-style previews from the same source of truth.
+pub const DASH_PATTERNS: [&[f32]; 9] = [
+    &[],                                  // 0 none
+    &[],                                  // 1 solid
+    &[1.0, 3.0],                          // 2 dotted
+    &[5.0, 3.0],                          // 3 dashed
+    &[7.0, 3.0],                          // 4 long dash
+    &[1.0, 3.0, 5.0, 3.0],                // 5 dot-dash
+    &[1.0, 3.0, 7.0, 3.0],                // 6 dot-longdash
+    &[1.0, 3.0, 5.0, 3.0, 1.0, 3.0],      // 7 dot-dash-dot
+    &[5.0, 3.0, 1.0, 3.0, 5.0, 3.0],      // 8 dash-dot-dash
+];
+
 fn dash_pattern(linestyle: i32, width: f32) -> Option<Vec<f32>> {
     let u = width.max(1.0);
-    let pat: &[f32] = match linestyle {
-        2 => &[1.0, 3.0],                // dotted
-        3 => &[5.0, 3.0],                // dashed
-        4 => &[7.0, 3.0],                // long dash
-        5 => &[1.0, 3.0, 5.0, 3.0],      // dot-dash
-        6 => &[1.0, 3.0, 7.0, 3.0],      // dot-longdash
-        7 => &[1.0, 3.0, 5.0, 3.0, 1.0, 3.0], // dot-dash-dot
-        8 => &[5.0, 3.0, 1.0, 3.0, 5.0, 3.0], // dash-dot-dash
-        _ => return None,                // 0/1 -> solid
-    };
+    let pat = usize::try_from(linestyle)
+        .ok()
+        .and_then(|i| DASH_PATTERNS.get(i))
+        .filter(|p| !p.is_empty())?;
     Some(pat.iter().map(|d| d * u).collect())
 }

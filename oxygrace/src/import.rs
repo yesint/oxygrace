@@ -80,11 +80,20 @@ pub fn import_data_str(
 /// Set the graph's world window to its data extents (padding degenerate
 /// ranges), like the reader does for projects without an explicit `@world`.
 pub fn autoscale_world(graph: &mut Graph) {
+    autoscale_world_filtered(graph, |_, _| true);
+}
+
+/// [`autoscale_world`] over the sets selected by `filter(index, set)` —
+/// e.g. only non-hidden sets, or one clicked set.
+pub fn autoscale_world_filtered(graph: &mut Graph, filter: impl Fn(usize, &Set) -> bool) {
     let mut xmin = f64::INFINITY;
     let mut xmax = f64::NEG_INFINITY;
     let mut ymin = f64::INFINITY;
     let mut ymax = f64::NEG_INFINITY;
-    for set in &graph.sets {
+    for (i, set) in graph.sets.iter().enumerate() {
+        if !filter(i, set) {
+            continue;
+        }
         if let (Some(xs), Some(ys)) = (set.data.x(), set.data.y()) {
             for &x in xs {
                 if x.is_finite() {

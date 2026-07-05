@@ -443,30 +443,32 @@ pub fn linestyle(
     });
 }
 
-/// Paint a small sample line in Grace's dash pattern for the style.
+/// Paint a small sample line in Grace's dash pattern for the style, driven
+/// by the renderer's own dash table (`DASH_PATTERNS`, width-relative runs).
 fn dash_preview(ui: &mut egui::Ui, style: i32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(36.0, 14.0), egui::Sense::hover());
+    if style == 0 {
+        return; // none: draw nothing
+    }
     let y = rect.center().y;
     let stroke = egui::Stroke::new(2.0, ui.visuals().text_color());
-    let dashes: &[f32] = match style {
-        0 => &[],                              // none: draw nothing
-        1 => &[36.0],                          // solid
-        2 => &[2.0, 6.0],                      // dotted
-        3 => &[10.0, 6.0],                     // dashed
-        4 => &[14.0, 6.0],                     // long dash
-        5 => &[2.0, 6.0, 10.0, 6.0],           // dot-dash
-        6 => &[2.0, 6.0, 14.0, 6.0],           // dot-long dash
-        7 => &[2.0, 6.0, 10.0, 6.0, 2.0, 6.0], // dot-dash-dot
-        _ => &[10.0, 6.0, 2.0, 6.0, 10.0, 6.0], // dash-dot-dash
-    };
+    let dashes = oxygrace::render::canvas::DASH_PATTERNS
+        .get(style.max(0) as usize)
+        .copied()
+        .unwrap_or(&[]);
     if dashes.is_empty() {
+        // Solid.
+        ui.painter()
+            .line_segment([rect.left_center(), rect.right_center()], stroke);
         return;
     }
+    // Runs are in line widths; preview at a 2 px line width.
+    let unit = 2.0;
     let mut x = rect.left();
     let mut draw = true;
     let mut i = 0;
     while x < rect.right() {
-        let seg = dashes[i % dashes.len()].min(rect.right() - x);
+        let seg = (dashes[i % dashes.len()] * unit).min(rect.right() - x);
         if draw {
             ui.painter()
                 .line_segment([egui::pos2(x, y), egui::pos2(x + seg, y)], stroke);
