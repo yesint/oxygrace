@@ -186,3 +186,19 @@ fn corpus_renders_svg() {
     }
     assert!(count > 0, "no example files found in {dir}");
 }
+
+/// The tick/ticklabel side accepts both spellings: Grace writes "place"
+/// (pars.yacc `opchoice_sel: PLACE opchoice`), "op" is the alternate.
+#[test]
+fn tick_side_place_spelling() {
+    let p = oxygrace::load_str(
+        "@with g0\n\
+         @    yaxis  tick place opposite\n\
+         @    yaxis  ticklabel place opposite\n\
+         @    yaxis  label place opposite\n",
+    );
+    let ax = &p.graphs[0].axes[1];
+    assert_eq!(ax.op, 1, "tick place");
+    assert_eq!(ax.tl_op, 1, "ticklabel place");
+    assert_eq!(ax.label_op, 1, "label place");
+}

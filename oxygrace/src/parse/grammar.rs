@@ -561,11 +561,10 @@ peg::parser! {
             / kw("minor") __ p:tick_level(false) { AxisProp::Minor(p) }
             / kw("default") __ n:iflex() { AxisProp::AutoNum(n) }
             / kw("place") __ kw("rounded") __ b:onoff() { AxisProp::TickRound(b) }
-            / kw("op") __ v:(
-                  kw("both") { 2 }
-                  / kw("bottom") { 0 } / kw("left") { 0 } / kw("normal") { 0 }
-                  / kw("top") { 1 } / kw("right") { 1 } / kw("opposite") { 1 }
-              ) { AxisProp::TickOp(v) }
+            // Both spellings set t_op (pars.yacc `opchoice_sel`); "place
+            // rounded" above must stay first.
+            / kw("op") __ v:op_side() { AxisProp::TickOp(v) }
+            / kw("place") __ v:op_side() { AxisProp::TickOp(v) }
             / [_]* { AxisProp::Ignored }
 
         /// Major (`spacing` allowed) / minor tick level properties.
@@ -588,7 +587,10 @@ peg::parser! {
             // commit the PEG choice on "ticklabel 0, \"label\"" lines.
             = i:uint() comma() s:qstring() { AxisProp::SpecLabel { idx: i, label: s } }
             / b:onoff() { AxisProp::TlActive(b) }
+            // Both spellings set tl_op (pars.yacc: `opchoice_sel: PLACE
+            // opchoice` — "place" is what Grace writes to files).
             / kw("op") __ v:op_side() { AxisProp::TlOp(v) }
+            / kw("place") __ v:op_side() { AxisProp::TlOp(v) }
             / kw("type") __ kw("spec") { AxisProp::SpecType(2) }
             / kw("type") __ kw("auto") { AxisProp::SpecLabelsAutoOld }
             / kw("prec") __ n:iflex() { AxisProp::TlPrec(n) }
