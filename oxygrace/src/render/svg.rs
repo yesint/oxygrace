@@ -29,7 +29,7 @@ pub(crate) struct SvgBackend {
     /// Deduplicated clip rectangles, keyed by their coordinate bits.
     clip_ids: HashMap<(u32, u32, u32, u32), usize>,
     /// Deduplicated pattern tiles, keyed by (pattern, fg, bg).
-    pattern_ids: HashMap<(i32, [u8; 3], [u8; 3]), usize>,
+    pattern_ids: HashMap<(i32, [u8; 4], [u8; 4]), usize>,
 }
 
 /// Format a coordinate compactly (two decimals, trailing zeros trimmed).
@@ -46,6 +46,16 @@ fn fmt(v: f32) -> String {
 /// `#rrggbb` for a resolved color.
 fn hex(c: Rgba) -> String {
     format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b)
+}
+
+/// ` <attr>-opacity="…"` for a translucent color, empty when opaque (pen
+/// alpha, QtGrace `ALPHA_CHANNELS`).
+fn opacity_attr(attr: &str, c: Rgba) -> String {
+    if c.a == 255 {
+        String::new()
+    } else {
+        format!(" {}-opacity=\"{}\"", attr, fmt(c.a as f32 / 255.0))
+    }
 }
 
 /// Serialize a tiny-skia path into SVG path data.
@@ -128,8 +138,9 @@ impl SvgBackend {
         dash: Option<&[f32]>,
     ) {
         let mut attrs = format!(
-            " fill=\"none\" stroke=\"{}\" stroke-width=\"{}\"",
+            " fill=\"none\" stroke=\"{}\"{} stroke-width=\"{}\"",
             hex(color),
+            opacity_attr("stroke", color),
             fmt(width)
         );
         if let Some(dash) = dash {
@@ -146,10 +157,11 @@ impl SvgBackend {
     }
 
     pub(crate) fn fill_path(&mut self, path: &Path, fill: &FillPaint, rule: FillRule) {
-        let fill_attr = match fill {
-            FillPaint::Solid(c) => hex(*c),
+        let (fill_attr, opacity) = match fill {
+            FillPaint::Solid(c) => (hex(*c), opacity_attr("fill", *c)),
+            // Pattern tiles carry their own per-color opacity in the defs.
             FillPaint::Hatch { pattern, fg, bg } => {
-                format!("url(#p{})", self.pattern_id(*pattern, *fg, *bg))
+                (format!("url(#p{})", self.pattern_id(*pattern, *fg, *bg)), String::new())
             }
         };
         let rule_attr = match rule {
@@ -158,9 +170,10 @@ impl SvgBackend {
         };
         let _ = writeln!(
             self.body,
-            "<path d=\"{}\" fill=\"{}\"{}{}/>",
+            "<path d=\"{}\" fill=\"{}\"{}{}{}/>",
             path_data(path),
             fill_attr,
+            opacity,
             rule_attr,
             self.clip_attr
         );
@@ -170,7 +183,7 @@ impl SvgBackend {
     /// rectangle with the set bits drawn in the foreground color, exactly
     /// like the raster tile.
     fn pattern_id(&mut self, pattern: i32, fg: Rgba, bg: Rgba) -> usize {
-        let key = (pattern, [fg.r, fg.g, fg.b], [bg.r, bg.g, bg.b]);
+        let key = (pattern, [fg.r, fg.g, fg.b, fg.a], [bg.r, bg.g, bg.b, bg.a]);
         let next = self.pattern_ids.len();
         let defs = &mut self.defs;
         *self.pattern_ids.entry(key).or_insert_with(|| {
@@ -188,11 +201,13 @@ impl SvgBackend {
             let _ = writeln!(
                 defs,
                 "<pattern id=\"p{}\" width=\"16\" height=\"16\" patternUnits=\"userSpaceOnUse\">\
-                 <rect width=\"16\" height=\"16\" fill=\"{}\"/><path d=\"{}\" fill=\"{}\"/></pattern>",
+                 <rect width=\"16\" height=\"16\" fill=\"{}\"{}/><path d=\"{}\" fill=\"{}\"{}/></pattern>",
                 next,
                 hex(bg),
+                opacity_attr("fill", bg),
                 cells,
-                hex(fg)
+                hex(fg),
+                opacity_attr("fill", fg)
             );
             next
         })

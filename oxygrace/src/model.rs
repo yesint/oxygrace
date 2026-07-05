@@ -447,6 +447,8 @@ pub struct ErrBar {
     /// 0 normal (plus side), 1 opposite, 2 both.
     pub place: i32,
     pub color: i32,
+    /// Opacity 0..=255 (QtGrace `errbar.pen.alpha`, `ALPHA_CHANNELS`).
+    pub alpha: i32,
     /// Cap half-length factor (view length = 0.01 * size).
     pub size: f64,
     /// Cap line width/style.
@@ -467,6 +469,7 @@ impl Default for ErrBar {
             active: true,
             place: 2,
             color: 1,
+            alpha: 255,
             size: 1.0,
             linewidth: 1.0,
             linestyle: 1,
@@ -488,6 +491,8 @@ pub struct AValue {
     pub size: f64,
     pub font: i32,
     pub color: i32,
+    /// Opacity 0..=255 (QtGrace `ALPHA_CHANNELS` extension).
+    pub alpha: i32,
     /// Rotation angle in degrees (`avalue rot`).
     pub angle: f64,
     pub format: TickFormat,
@@ -507,6 +512,7 @@ impl Default for AValue {
             size: 1.0,
             font: 0,
             color: 1,
+            alpha: 255,
             angle: 0.0,
             format: TickFormat::General,
             prec: 3,

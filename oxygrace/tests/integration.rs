@@ -202,3 +202,68 @@ fn tick_side_place_spelling() {
     assert_eq!(ax.tl_op, 1, "ticklabel place");
     assert_eq!(ax.label_op, 1, "label place");
 }
+
+/// QtGrace's per-set alpha channels (`#QTGRACE_ADDITIONAL_PARAMETER: G n S m
+/// ALPHA_CHANNELS {..}`) parse into the six set pens, survive a save/load
+/// round trip, and actually blend when rasterized.
+#[test]
+fn qtgrace_alpha_channels_parse_write_render() {
+    let src = "\
+@version 50122
+@page size 200, 200
+@with g0
+@    view 0.1, 0.1, 0.9, 0.9
+@    world 0, 0, 1, 1
+@    s0 fill type 2
+@    s0 fill color 2
+@    s0 fill pattern 1
+@    s0 line color 2
+@target G0.S0
+@type xy
+0 1
+1 1
+&
+#QTGRACE_ADDITIONAL_PARAMETER: G 0 S 0 ALPHA_CHANNELS {200;100;255;255;255;255}
+";
+    let project = oxygrace::load_str(src);
+    let set = &project.graphs[0].sets[0];
+    assert_eq!(set.line_pen.alpha, 200);
+    assert_eq!(set.fill_pen.alpha, 100);
+    assert_eq!(set.symbol_pen.alpha, 255);
+
+    // The writer emits QtGrace's exact line; a reload preserves the alphas.
+    let written = oxygrace::save_str(&project);
+    assert!(
+        written.contains("#QTGRACE_ADDITIONAL_PARAMETER: G 0 S 0 ALPHA_CHANNELS {200;100;255;255;255;255}"),
+        "missing alpha line in output:\n{written}"
+    );
+    let reloaded = oxygrace::load_str(&written);
+    assert_eq!(reloaded.graphs[0].sets[0].fill_pen.alpha, 100);
+
+    // Rasterize: the baseline fill (red, alpha 100) over the white page
+    // must blend, not paint solid red: r stays 255, g/b ≈ 255·(1−100/255).
+    let fonts = oxygrace::FontSet::load();
+    let res = oxygrace::render_pixmap(&project, &fonts);
+    let px = res
+        .pixmap
+        .pixel(100, 120)
+        .expect("pixel inside the fill")
+        .demultiply();
+    assert_eq!(px.red(), 255, "translucent red keeps full red channel");
+    let expect = 255.0 * (1.0 - 100.0 / 255.0);
+    assert!(
+        (px.green() as f32 - expect).abs() < 3.0 && (px.blue() as f32 - expect).abs() < 3.0,
+        "expected white-blended red ≈ (255, {expect:.0}, {expect:.0}), got ({}, {}, {})",
+        px.red(),
+        px.green(),
+        px.blue()
+    );
+
+    // The translucent fill is see-through: the hit-test does not let it
+    // occlude (demote) elements drawn beneath it.
+    let candidates = res.info.hit_candidates(100.0, 120.0, 2.0);
+    assert_eq!(
+        candidates.first(),
+        Some(&oxygrace::ElementId::Set { graph: 0, set: 0 })
+    );
+}

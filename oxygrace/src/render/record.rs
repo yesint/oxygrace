@@ -122,6 +122,10 @@ struct ElementRecord {
     /// An explicit click-region (plot area, legend area) rather than drawn
     /// ink — regions always lose hit-test priority to drawn elements.
     region: bool,
+    /// Whether a fill polygon actually hides what is under it: translucent
+    /// fills (pen alpha < 255) are see-through and must not demote the
+    /// elements visible through them.
+    opaque: bool,
 }
 
 /// Element geometry collected during one render pass.
@@ -208,7 +212,7 @@ impl RenderInfo {
                 }
                 RecordShape::Polygon(pts) => {
                     if point_in_polygon(pts, x, y) {
-                        inside_fill = !r.region;
+                        inside_fill = !r.region && r.opaque;
                         Some((1u8, 0.0))
                     } else {
                         let d = dist_to_polyline(pts, x, y, true);
@@ -345,15 +349,21 @@ impl Recorder {
     /// Record a primitive under the innermost open element (drops it when no
     /// element is open — e.g. decorative output nobody can select).
     pub(crate) fn record(&mut self, shape: RecordShape) {
-        self.record_impl(shape, false);
+        self.record_impl(shape, false, true);
+    }
+
+    /// Record a fill that may be translucent: only opaque fills occlude
+    /// (demote) the elements drawn under them in hit-testing.
+    pub(crate) fn record_fill(&mut self, shape: RecordShape, opaque: bool) {
+        self.record_impl(shape, false, opaque);
     }
 
     /// Record an explicit clickable region (lowest hit priority).
     pub(crate) fn record_region(&mut self, shape: RecordShape) {
-        self.record_impl(shape, true);
+        self.record_impl(shape, true, true);
     }
 
-    fn record_impl(&mut self, shape: RecordShape, region: bool) {
+    fn record_impl(&mut self, shape: RecordShape, region: bool, opaque: bool) {
         if self.muted > 0 {
             return;
         }
@@ -374,9 +384,15 @@ impl Recorder {
             },
         };
         let area = ink_area(&shape);
-        self.info
-            .records
-            .push(ElementRecord { id, shape, bbox, area, clip: self.clip, region });
+        self.info.records.push(ElementRecord {
+            id,
+            shape,
+            bbox,
+            area,
+            clip: self.clip,
+            region,
+            opaque,
+        });
     }
 
     pub(crate) fn finish(mut self) -> RenderInfo {

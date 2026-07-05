@@ -37,7 +37,35 @@ pub fn save_str(project: &Project) -> String {
     for (gno, graph) in project.graphs.iter().enumerate() {
         write_data(&mut out, gno, graph);
     }
+    write_alpha_channels(&mut out, project);
     out
+}
+
+/// QtGrace extension: per-set pen alphas as end-of-file comment lines, in
+/// QtGrace's exact format (files.cpp: `#QTGRACE_ADDITIONAL_PARAMETER: G %d
+/// S %d ALPHA_CHANNELS {line;fill;sym;symfill;avalue;errbar}`). Emitted
+/// only for sets with a non-default (non-opaque) channel, so files without
+/// transparency stay byte-identical; plain Grace ignores the comments.
+fn write_alpha_channels(out: &mut String, project: &Project) {
+    for (gno, graph) in project.graphs.iter().enumerate() {
+        for (sno, set) in graph.sets.iter().enumerate() {
+            let a = [
+                set.line_pen.alpha,
+                set.fill_pen.alpha,
+                set.symbol_pen.alpha,
+                set.symbol_fill.alpha,
+                set.avalue.alpha,
+                set.errbar.alpha,
+            ];
+            if a.iter().any(|&x| x != 255) {
+                let list = a.map(|x| x.to_string()).join(";");
+                let _ = writeln!(
+                    out,
+                    "#QTGRACE_ADDITIONAL_PARAMETER: G {gno} S {sno} ALPHA_CHANNELS {{{list}}}"
+                );
+            }
+        }
+    }
 }
 
 /// Serialize a project to a `.agr` file on disk.

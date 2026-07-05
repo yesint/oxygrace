@@ -69,6 +69,8 @@ pub fn parse_project(content: &str) -> Project {
             continue;
         }
         if trimmed.starts_with('#') {
+            // QtGrace rides extension parameters in comment lines.
+            apply_qtgrace_param(&mut project, trimmed);
             continue;
         }
         if let Some(body) = trimmed.strip_prefix('@') {
@@ -247,6 +249,48 @@ fn flush_data(project: &mut Project, cur: &mut Cursor) {
         .map(|c| rows.iter().filter_map(|r| r.get(c).copied()).collect())
         .collect();
     data.strs = row_strs;
+}
+
+/// QtGrace extension parameters ride in `#QTGRACE_ADDITIONAL_PARAMETER:`
+/// comment lines at the end of the file. We honor the per-set
+/// `ALPHA_CHANNELS` one (files.cpp, `sscanf("... G %d S %d ALPHA_CHANNELS
+/// %s")`): six 0..=255 alphas in the order linepen, setfillpen, sympen,
+/// symfillpen, avalue, errbar.pen. Everything else is ignored, and — like
+/// QtGrace's `is_valid_setno` gate — the values only apply to sets that
+/// already exist.
+fn apply_qtgrace_param(project: &mut Project, line: &str) {
+    let Some(rest) = line.strip_prefix("#QTGRACE_ADDITIONAL_PARAMETER:") else {
+        return;
+    };
+    let mut it = rest.split_whitespace();
+    let (Some("G"), Some(g), Some("S"), Some(s), Some("ALPHA_CHANNELS"), Some(list)) = (
+        it.next(),
+        it.next().and_then(|v| v.parse::<usize>().ok()),
+        it.next(),
+        it.next().and_then(|v| v.parse::<usize>().ok()),
+        it.next(),
+        it.next(),
+    ) else {
+        return;
+    };
+    let vals: Vec<i32> = list
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .split(';')
+        .filter_map(|v| v.trim().parse().ok())
+        .collect();
+    let Ok([line_a, fill_a, sym_a, symfill_a, av_a, eb_a]) = <[i32; 6]>::try_from(vals) else {
+        return;
+    };
+    let Some(set) = project.graphs.get_mut(g).and_then(|gr| gr.sets.get_mut(s)) else {
+        return;
+    };
+    set.line_pen.alpha = line_a;
+    set.fill_pen.alpha = fill_a;
+    set.symbol_pen.alpha = sym_a;
+    set.symbol_fill.alpha = symfill_a;
+    set.avalue.alpha = av_a;
+    set.errbar.alpha = eb_a;
 }
 
 /// Apply a parsed command to the project, updating the cursor as needed.

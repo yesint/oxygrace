@@ -270,6 +270,19 @@ device-space geometry, so the SVG matches the PNG pixel-for-pixel
 (validated by rasterizing with Chromium and diffing). Text is emitted
 as glyph outline paths.
 
+**Alpha channels (QtGrace extension):** per-set pen opacities ride in
+`#QTGRACE_ADDITIONAL_PARAMETER: G n S m ALPHA_CHANNELS
+{line;fill;sym;symfill;avalue;errbar}` comment lines (QtGrace files.cpp;
+0..=255, default 255). Parsed in `reader.rs` (existing sets only, like
+`is_valid_setno`), stored on `Pen.alpha` / `AValue.alpha` / `ErrBar.alpha`,
+applied through the canvas `set_alpha` state (QtGrace `draw.cpp setalpha`;
+the Qt driver stamps `col.setAlpha(getalpha())`) in both raster and SVG
+backends (`stroke-opacity`/`fill-opacity`), written back only when
+non-default so plain Grace files stay byte-identical. Translucent fills
+don't occlude in hit-testing. GUI: opacity slider inside the six set
+color pickers (`rows::color_alpha`). Graph/axis/object-level QtGrace
+alphas (`GRAPH_ALPHA`, `AXIS_ALPHA`, …) are still ignored.
+
 **GUI Phase 0 + G1 (done):** cargo workspace; `render_pixmap` (raw
 premultiplied-RGBA + `RenderInfo` hit-test geometry, recorded as a pure
 side-channel on the canvas — guarded by a corpus pixel-equality test);

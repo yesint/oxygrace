@@ -45,8 +45,8 @@ fn pattern_tile(pattern: i32, color: Rgba, bg: Rgba) -> Option<Pixmap> {
             // LSB-first within each byte (X11 bitmap order).
             let byte = bits[row * 2 + col / 8];
             let c = if (byte >> (col % 8)) & 1 == 1 { color } else { bg };
-            px[row * 16 + col] =
-                tiny_skia::PremultipliedColorU8::from_rgba(c.r, c.g, c.b, 255).unwrap();
+            // Colors may carry pen alpha (translucent fills): premultiply.
+            px[row * 16 + col] = tiny_skia::ColorU8::from_rgba(c.r, c.g, c.b, c.a).premultiply();
         }
     }
     Some(tile)
@@ -199,6 +199,11 @@ pub struct Canvas<'a> {
     page: PageTransform,
     project: &'a Project,
     fonts: &'a FontSet,
+    /// Current drawing opacity 0..=255, applied to every resolved color —
+    /// Grace pens carry an alpha in QtGrace (`draw.cpp` `setalpha`), and
+    /// the Qt driver stamps it onto the paint color
+    /// (`x11drv.cpp` `col.setAlpha(getalpha())`).
+    alpha: u8,
     /// Optional hit-test recorder (see [`crate::render::record`]). A pure
     /// observer: drawing output is identical whether it is on or off.
     recorder: Option<Recorder>,
@@ -212,6 +217,7 @@ impl<'a> Canvas<'a> {
             page: PageTransform::new(project.page_width, project.page_height),
             project,
             fonts,
+            alpha: 255,
             recorder: None,
         }
     }
@@ -232,8 +238,25 @@ impl<'a> Canvas<'a> {
             page: PageTransform::new(project.page_width, project.page_height),
             project,
             fonts,
+            alpha: 255,
             recorder: None,
         }
+    }
+
+    /// Set the drawing opacity for subsequent primitives (0..=255; values
+    /// outside the range reset to opaque, like QtGrace's `setalpha`,
+    /// `draw.cpp`). Callers pair it with a `set_alpha(255)` restore.
+    pub fn set_alpha(&mut self, alpha: i32) {
+        self.alpha = if (0..=255).contains(&alpha) { alpha as u8 } else { 255 };
+    }
+
+    /// Resolve a color index with the current drawing opacity stamped in
+    /// (the map holds opaque RGB; alpha comes from the active pen, like
+    /// QtGrace's `col.setAlpha(getalpha())`).
+    fn resolve(&self, color: i32) -> Rgba {
+        let mut c = color::resolve(self.project, color);
+        c.a = self.alpha;
+        c
     }
 
     /// Open an element: subsequent primitives are recorded under `id` (the
@@ -360,14 +383,14 @@ impl<'a> Canvas<'a> {
     /// Resolve a fill (color index + Grace pattern index) for the backend.
     /// Pattern 0 means "no fill" and is handled by the callers.
     fn fill_paint(&self, color: i32, pattern: i32) -> FillPaint {
-        let rgba = color::resolve(self.project, color);
+        let rgba = self.resolve(color);
         if pattern == 1 || !(0..PATTERN_BITS.len() as i32).contains(&pattern) {
             FillPaint::Solid(rgba)
         } else {
             FillPaint::Hatch {
                 pattern,
                 fg: rgba,
-                bg: color::resolve(self.project, 0),
+                bg: self.resolve(0),
             }
         }
     }
@@ -401,7 +424,7 @@ impl<'a> Canvas<'a> {
         let Some(path) = pb.finish() else { return };
         let width = self.page.linewidth_px(linewidth).max(0.1);
         let dash = dash_pattern(linestyle, width);
-        let rgba = color::resolve(self.project, color);
+        let rgba = self.resolve(color);
         self.backend.stroke_path(&path, rgba, width, dash.as_deref());
         if self.recorder.is_some() {
             self.record(RecordShape::Polyline { pts: dev, half_width: width / 2.0 });
@@ -434,8 +457,10 @@ impl<'a> Canvas<'a> {
         }
         pb.close();
         let Some(path) = pb.finish() else { return };
-        if self.recorder.is_some() {
-            self.record(RecordShape::Polygon(dev));
+        if let Some(r) = &mut self.recorder {
+            // Translucent fills are see-through: they must not occlude the
+            // elements visible through them in hit-testing.
+            r.record_fill(RecordShape::Polygon(dev), self.alpha == 255);
         }
         let rule = if rule == 1 {
             FillRule::EvenOdd
@@ -524,7 +549,7 @@ impl<'a> Canvas<'a> {
         };
         let width = self.page.linewidth_px(lw).max(0.1);
         let dash = dash_pattern(ls, width);
-        let rgba = color::resolve(self.project, color);
+        let rgba = self.resolve(color);
         self.backend.stroke_path(&path, rgba, width, dash.as_deref());
         // The ring: a hollow circle's center doesn't capture clicks (small
         // symbols stay clickable in the middle through the hit tolerance).
@@ -578,7 +603,7 @@ impl<'a> Canvas<'a> {
         let Some(path) = self.oval_path(p1, p2) else { return };
         let width = self.page.linewidth_px(lw).max(0.1);
         let dash = dash_pattern(ls, width);
-        let rgba = color::resolve(self.project, color);
+        let rgba = self.resolve(color);
         self.backend.stroke_path(&path, rgba, width, dash.as_deref());
         self.record_ellipse(p1, p2, Some(width / 2.0));
     }
@@ -687,7 +712,7 @@ impl<'a> Canvas<'a> {
             }
         }
 
-        let default_color = color::resolve(self.project, color);
+        let default_color = self.resolve(color);
         for g in &layout.glyphs {
             let outline = self.fonts.outline_char(g.font, g.ch);
             let Some(path) = &outline.path else { continue };
@@ -712,7 +737,7 @@ impl<'a> Canvas<'a> {
                 continue;
             };
             let col = match g.color {
-                Some(idx) => color::resolve(self.project, idx),
+                Some(idx) => self.resolve(idx),
                 None => default_color,
             };
             self.backend
@@ -738,7 +763,7 @@ impl<'a> Canvas<'a> {
             pb.close();
             let Some(path) = pb.finish() else { continue };
             let col = match r.color {
-                Some(idx) => color::resolve(self.project, idx),
+                Some(idx) => self.resolve(idx),
                 None => default_color,
             };
             self.backend

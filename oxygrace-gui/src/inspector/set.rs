@@ -88,9 +88,18 @@ pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, s: usize, edits: &mu
         rows::num(ui, edits, "Width", set.linewidth, 0.1, "set line: width", move |p, v| {
             p.graphs[g].sets[s].linewidth = v.max(0.0);
         });
-        rows::color(ui, edits, "Color", set.line_pen.color, project, "set line: color", move |p, v| {
-            p.graphs[g].sets[s].line_pen.color = v;
-        });
+        rows::color_alpha(
+            ui,
+            edits,
+            "Color",
+            set.line_pen.color,
+            set.line_pen.alpha,
+            project,
+            "set line: color",
+            "set line: opacity",
+            move |p, v| p.graphs[g].sets[s].line_pen.color = v,
+            move |p, v| p.graphs[g].sets[s].line_pen.alpha = v,
+        );
         rows::toggle(ui, edits, "Drop lines", set.dropline, "set: drop lines", move |p, v| {
             p.graphs[g].sets[s].dropline = v;
         });
@@ -103,12 +112,30 @@ pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, s: usize, edits: &mu
         rows::num(ui, edits, "Size", set.symbol_size, 0.05, "symbol: size", move |p, v| {
             p.graphs[g].sets[s].symbol_size = v.max(0.0);
         });
-        rows::color(ui, edits, "Color", set.symbol_pen.color, project, "symbol: color", move |p, v| {
-            p.graphs[g].sets[s].symbol_pen.color = v;
-        });
-        rows::color(ui, edits, "Fill color", set.symbol_fill.color, project, "symbol: fill color", move |p, v| {
-            p.graphs[g].sets[s].symbol_fill.color = v;
-        });
+        rows::color_alpha(
+            ui,
+            edits,
+            "Color",
+            set.symbol_pen.color,
+            set.symbol_pen.alpha,
+            project,
+            "symbol: color",
+            "symbol: opacity",
+            move |p, v| p.graphs[g].sets[s].symbol_pen.color = v,
+            move |p, v| p.graphs[g].sets[s].symbol_pen.alpha = v,
+        );
+        rows::color_alpha(
+            ui,
+            edits,
+            "Fill color",
+            set.symbol_fill.color,
+            set.symbol_fill.alpha,
+            project,
+            "symbol: fill color",
+            "symbol: fill opacity",
+            move |p, v| p.graphs[g].sets[s].symbol_fill.color = v,
+            move |p, v| p.graphs[g].sets[s].symbol_fill.alpha = v,
+        );
         rows::pattern(ui, edits, "Fill pattern", set.symbol_fill.pattern, "symbol: fill pattern", move |p, v| {
             p.graphs[g].sets[s].symbol_fill.pattern = v;
         });
@@ -132,9 +159,18 @@ pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, s: usize, edits: &mu
         rows::combo(ui, edits, "Type", set.fill_type, &FILL_OPTS, "fill: type", move |p, v| {
             p.graphs[g].sets[s].fill_type = v;
         });
-        rows::color(ui, edits, "Color", set.fill_pen.color, project, "fill: color", move |p, v| {
-            p.graphs[g].sets[s].fill_pen.color = v;
-        });
+        rows::color_alpha(
+            ui,
+            edits,
+            "Color",
+            set.fill_pen.color,
+            set.fill_pen.alpha,
+            project,
+            "fill: color",
+            "fill: opacity",
+            move |p, v| p.graphs[g].sets[s].fill_pen.color = v,
+            move |p, v| p.graphs[g].sets[s].fill_pen.alpha = v,
+        );
         rows::pattern(ui, edits, "Pattern", set.fill_pen.pattern, "fill: pattern", move |p, v| {
             p.graphs[g].sets[s].fill_pen.pattern = v;
         });
@@ -151,9 +187,18 @@ pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, s: usize, edits: &mu
         rows::combo(ui, edits, "Placement", e.place, &SIDE_OPTS, "error bars: placement", move |p, v| {
             p.graphs[g].sets[s].errbar.place = v;
         });
-        rows::color(ui, edits, "Color", e.color, project, "error bars: color", move |p, v| {
-            p.graphs[g].sets[s].errbar.color = v;
-        });
+        rows::color_alpha(
+            ui,
+            edits,
+            "Color",
+            e.color,
+            e.alpha,
+            project,
+            "error bars: color",
+            "error bars: opacity",
+            move |p, v| p.graphs[g].sets[s].errbar.color = v,
+            move |p, v| p.graphs[g].sets[s].errbar.alpha = v,
+        );
         rows::num(ui, edits, "Cap size", e.size, 0.05, "error bars: size", move |p, v| {
             p.graphs[g].sets[s].errbar.size = v.max(0.0);
         });
@@ -179,9 +224,18 @@ pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, s: usize, edits: &mu
         rows::font(ui, edits, "Font", a.font, project, "value labels: font", move |p, v| {
             p.graphs[g].sets[s].avalue.font = v;
         });
-        rows::color(ui, edits, "Color", a.color, project, "value labels: color", move |p, v| {
-            p.graphs[g].sets[s].avalue.color = v;
-        });
+        rows::color_alpha(
+            ui,
+            edits,
+            "Color",
+            a.color,
+            a.alpha,
+            project,
+            "value labels: color",
+            "value labels: opacity",
+            move |p, v| p.graphs[g].sets[s].avalue.color = v,
+            move |p, v| p.graphs[g].sets[s].avalue.alpha = v,
+        );
         rows::int(ui, edits, "Precision", a.prec, 0..=12, "value labels: precision", move |p, v| {
             p.graphs[g].sets[s].avalue.prec = v;
         });

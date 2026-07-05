@@ -203,6 +203,9 @@ pub fn combo<T: Copy + PartialEq + 'static>(
     });
 }
 
+/// A boxed value setter (so optional setters can be passed around).
+type Setter = Box<dyn FnOnce(&mut Project, i32)>;
+
 /// A Grace color index: a swatch button that drops down a grid of
 /// clickable swatches (names only on hover — no numbers in the UI).
 pub fn color(
@@ -213,6 +216,47 @@ pub fn color(
     project: &Project,
     ulabel: &'static str,
     set: impl FnOnce(&mut Project, i32) + 'static,
+) {
+    color_impl(ui, edits, label, v, project, ulabel, Box::new(set), None);
+}
+
+/// A color row whose picker also carries an opacity slider (0..=255, the
+/// QtGrace per-pen alpha channel).
+#[allow(clippy::too_many_arguments)]
+pub fn color_alpha(
+    ui: &mut egui::Ui,
+    edits: &mut Vec<Edit>,
+    label: &str,
+    v: i32,
+    alpha: i32,
+    project: &Project,
+    ulabel: &'static str,
+    alabel: &'static str,
+    set: impl FnOnce(&mut Project, i32) + 'static,
+    set_alpha: impl FnOnce(&mut Project, i32) + 'static,
+) {
+    color_impl(
+        ui,
+        edits,
+        label,
+        v,
+        project,
+        ulabel,
+        Box::new(set),
+        Some((alpha, alabel, Box::new(set_alpha))),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn color_impl(
+    ui: &mut egui::Ui,
+    edits: &mut Vec<Edit>,
+    label: &str,
+    v: i32,
+    project: &Project,
+    ulabel: &'static str,
+    set: Setter,
+    alpha: Option<(i32, &'static str, Setter)>,
 ) {
     row(ui, label, |ui| {
         let rgba = resolve(project, v);
@@ -229,43 +273,62 @@ pub fn color(
                 .min_size(egui::vec2(48.0, 18.0)),
         );
         let mut picked = None;
-        egui::Popup::menu(&resp).show(|ui| {
-            // 16 built-ins plus any override indices beyond them (built
-            // only while the popup is open).
-            let mut indices: Vec<i32> = (0..16).collect();
-            for &(i, _) in &project.color_overrides {
-                if !(0..16).contains(&i) {
-                    indices.push(i);
-                }
-            }
-            indices.sort_unstable();
-            indices.dedup();
-            egui::Grid::new("color_grid").spacing([4.0, 4.0]).show(ui, |ui| {
-                for (n, &i) in indices.iter().enumerate() {
-                    let c = resolve(project, i);
-                    let current = i == v;
-                    let stroke = if current {
-                        egui::Stroke::new(2.0, crate::theme::ACCENT)
-                    } else {
-                        egui::Stroke::new(1.0, egui::Color32::from_gray(120))
-                    };
-                    let b = ui
-                        .add(
-                            egui::Button::new("")
-                                .fill(c)
-                                .stroke(stroke)
-                                .min_size(egui::vec2(24.0, 24.0)),
-                        )
-                        .on_hover_text(color_name(project, i));
-                    if b.clicked() {
-                        picked = Some(i);
+        // Close only on an outside click so the opacity slider is usable;
+        // a swatch pick closes explicitly.
+        egui::Popup::menu(&resp)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                // 16 built-ins plus any override indices beyond them (built
+                // only while the popup is open).
+                let mut indices: Vec<i32> = (0..16).collect();
+                for &(i, _) in &project.color_overrides {
+                    if !(0..16).contains(&i) {
+                        indices.push(i);
                     }
-                    if n % 8 == 7 {
-                        ui.end_row();
+                }
+                indices.sort_unstable();
+                indices.dedup();
+                egui::Grid::new("color_grid").spacing([4.0, 4.0]).show(ui, |ui| {
+                    for (n, &i) in indices.iter().enumerate() {
+                        let c = resolve(project, i);
+                        let current = i == v;
+                        let stroke = if current {
+                            egui::Stroke::new(2.0, crate::theme::ACCENT)
+                        } else {
+                            egui::Stroke::new(1.0, egui::Color32::from_gray(120))
+                        };
+                        let b = ui
+                            .add(
+                                egui::Button::new("")
+                                    .fill(c)
+                                    .stroke(stroke)
+                                    .min_size(egui::vec2(24.0, 24.0)),
+                            )
+                            .on_hover_text(color_name(project, i));
+                        if b.clicked() {
+                            picked = Some(i);
+                            ui.close();
+                        }
+                        if n % 8 == 7 {
+                            ui.end_row();
+                        }
+                    }
+                });
+                // Opacity slider (QtGrace pen alpha, 0..=255); slider drags
+                // coalesce into one undo step.
+                if let Some((a, alabel, set_alpha)) = alpha {
+                    ui.separator();
+                    let mut val = a;
+                    let sr = ui.add(
+                        egui::Slider::new(&mut val, 0..=255)
+                            .text("Opacity")
+                            .show_value(true),
+                    );
+                    if sr.changed() {
+                        edits.push(Edit::new(alabel, val, sr.dragged(), set_alpha));
                     }
                 }
             });
-        });
         if let Some(val) = picked {
             edits.push(Edit::new(ulabel, val, false, set));
         }

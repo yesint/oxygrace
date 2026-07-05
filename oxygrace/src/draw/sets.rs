@@ -184,6 +184,9 @@ fn draw_avalues(
     let n = xs.len().min(ys.len());
     let z = set.data.cols.get(2);
     let skip = set.symskip.max(0) as usize + 1;
+    // Value labels draw at the avalue alpha (plotone.cpp
+    // setalpha(avalue.alpha) in drawsetavalues).
+    canvas.set_alpha(av.alpha);
     for i in (0..n).step_by(skip) {
         let wx = xs[i];
         let wy = ys[i] + refy.and_then(|r| r.get(i)).copied().unwrap_or(0.0);
@@ -224,6 +227,7 @@ fn draw_avalues(
             av.angle,
         );
     }
+    canvas.set_alpha(255);
 }
 
 /// Error-bar column indices for dx+, dx-, dy+, dy- (`None` = absent).
@@ -328,6 +332,9 @@ fn draw_one_errbar(canvas: &mut Canvas, graph: &Graph, eb: &crate::model::ErrBar
     let v = graph.view;
     let outside = vp2.x < v.xmin || vp2.x > v.xmax || vp2.y < v.ymin || vp2.y > v.ymax;
 
+    // Error bars draw with the errbar pen alpha (plotone.cpp
+    // setalpha(p->errbar.pen.alpha) around each part).
+    canvas.set_alpha(eb.alpha);
     if eb.arrow_clip && outside {
         let vp2c = VPoint {
             x: vp1.x + eb.cliplen * ux,
@@ -340,6 +347,7 @@ fn draw_one_errbar(canvas: &mut Canvas, graph: &Graph, eb: &crate::model::ErrBar
         let vpl = VPoint { x: vpc.x + 0.5 * big_l * uy, y: vpc.y - 0.5 * big_l * ux };
         let vpr = VPoint { x: vpc.x - 0.5 * big_l * uy, y: vpc.y + 0.5 * big_l * ux };
         canvas.draw_polyline(&[vpl, vp2c, vpr], eb.color, eb.linewidth, 1);
+        canvas.set_alpha(255);
         return;
     }
 
@@ -348,6 +356,7 @@ fn draw_one_errbar(canvas: &mut Canvas, graph: &Graph, eb: &crate::model::ErrBar
     let minus = VPoint { x: vp2.x - ilen * uy, y: vp2.y + ilen * ux };
     let plus = VPoint { x: vp2.x + ilen * uy, y: vp2.y - ilen * ux };
     canvas.draw_polyline(&[minus, plus], eb.color, eb.linewidth, eb.linestyle);
+    canvas.set_alpha(255);
 }
 
 /// Hi/Lo/Open/Close set (plotone.cpp `drawsethilo`): a vertical line from
@@ -369,6 +378,8 @@ fn draw_hilo(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
     };
     let ilen = 0.02 * set.symbol_size;
     let n = xs.len().min(y1.len()).min(y2.len()).min(y3.len()).min(y4.len());
+    // Hilo bars draw with the symbol pen, alpha included.
+    canvas.set_alpha(set.symbol_pen.alpha);
     for i in 0..n {
         let (color, lw, ls) = (set.symbol_pen.color, set.symbol_linewidth, set.symbol_linestyle);
         let (x1, vy1) = wt.world_to_view(xs[i], y1[i]);
@@ -389,6 +400,7 @@ fn draw_hilo(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
             ls,
         );
     }
+    canvas.set_alpha(255);
 }
 
 /// Boxplot set (plotone.cpp `drawsetboxplot`): per point a box from the
@@ -429,9 +441,12 @@ fn draw_boxplot(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &S
             VPoint { x: vx - size, y: vub },
         ];
         if set.symbol_fill.pattern != 0 {
+            canvas.set_alpha(set.symbol_fill.alpha);
             canvas.fill_polygon(&rect, set.symbol_fill.color, set.symbol_fill.pattern);
+            canvas.set_alpha(255);
         }
         if set.symbol_linestyle != 0 {
+            canvas.set_alpha(set.symbol_pen.alpha);
             let mut closed = rect.to_vec();
             closed.push(rect[0]);
             canvas.draw_polyline(&closed, set.symbol_pen.color, set.symbol_linewidth, set.symbol_linestyle);
@@ -443,6 +458,7 @@ fn draw_boxplot(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &S
                 set.symbol_linewidth,
                 set.symbol_linestyle,
             );
+            canvas.set_alpha(255);
         }
     }
 }
@@ -465,11 +481,14 @@ fn draw_circlexy(canvas: &mut Canvas, wt: &WorldTransform, set: &Set) {
         let (x2, y2) = wt.world_to_view(xs[i] + rs[i], ys[i] + rs[i]);
         let (p1, p2) = (VPoint { x: x1, y: y1 }, VPoint { x: x2, y: y2 });
         if set.fill_type != FillType::None && set.fill_pen.pattern != 0 {
+            canvas.set_alpha(set.fill_pen.alpha);
             canvas.fill_ellipse(p1, p2, set.fill_pen.color, set.fill_pen.pattern);
         }
         if set.linestyle != 0 {
+            canvas.set_alpha(set.line_pen.alpha);
             canvas.stroke_ellipse(p1, p2, set.line_pen.color, set.linewidth, set.linestyle);
         }
+        canvas.set_alpha(255);
     }
 }
 
@@ -488,6 +507,8 @@ fn draw_vmap(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &Set)
     };
     let eb = &set.errbar;
     let n = xs.len().min(ys.len()).min(vxs.len()).min(vys.len());
+    // Arrows draw with the error-bar pen, alpha included.
+    canvas.set_alpha(eb.alpha);
     for i in 0..n {
         if !wt.valid_wpoint(xs[i], ys[i]) {
             continue;
@@ -512,6 +533,7 @@ fn draw_vmap(canvas: &mut Canvas, wt: &WorldTransform, graph: &Graph, set: &Set)
         let vpr = VPoint { x: vpc.x - 0.5 * big_l * uy, y: vpc.y + 0.5 * big_l * ux };
         canvas.draw_polyline(&[vpl, p2, vpr], eb.color, eb.linewidth, 1);
     }
+    canvas.set_alpha(255);
 }
 
 /// Draw vertical droplines from each point down to the set's baseline; in
@@ -530,6 +552,8 @@ fn draw_droplines(
     };
     let n = xs.len().min(ys.len());
     let ybase = baseline_value(graph, set, ys, n);
+    // Droplines draw with the line pen (drawsetline), alpha included.
+    canvas.set_alpha(set.line_pen.alpha);
     for i in 0..n {
         let r = refy.and_then(|r| r.get(i)).copied();
         let (base, top) = match r {
@@ -545,6 +569,7 @@ fn draw_droplines(
             if set.linestyle == 0 { 1 } else { set.linestyle },
         );
     }
+    canvas.set_alpha(255);
 }
 
 /// Draw the bars of a single set: each point becomes a rectangle of
@@ -583,13 +608,17 @@ fn draw_one_bar_set(
             VPoint { x: x1, y: ty },
         ];
         if do_fill {
+            // drawsetbars: setpen(p->symfillpen), alpha included.
+            canvas.set_alpha(set.symbol_fill.alpha);
             canvas.fill_polygon(&rect, set.symbol_fill.color, set.symbol_fill.pattern);
         }
         if do_outline {
+            canvas.set_alpha(set.symbol_pen.alpha);
             let mut closed = rect.to_vec();
             closed.push(rect[0]);
             canvas.draw_polyline(&closed, set.symbol_pen.color, set.symbol_linewidth, set.symbol_linestyle);
         }
+        canvas.set_alpha(255);
     }
 }
 
@@ -618,6 +647,9 @@ fn draw_set_fill(
     if n < 2 {
         return;
     }
+    // The fill draws with the set fill pen, alpha included (drawsetfill:
+    // setpen(p->setfillpen); QtGrace pens carry an alpha channel).
+    canvas.set_alpha(set.fill_pen.alpha);
     let mut pts: Vec<VPoint> = Vec::with_capacity(2 * n + 2);
     for (i, &x) in xs[..n].iter().enumerate() {
         let y = ys[i] + refy.and_then(|r| r.get(i)).copied().unwrap_or(0.0);
@@ -633,6 +665,7 @@ fn draw_set_fill(
                 pts.push(VPoint { x: vx + off, y: vy });
             }
             canvas.fill_polygon_rule(&pts, set.fill_pen.color, set.fill_pen.pattern, set.fill_rule);
+            canvas.set_alpha(255);
             return;
         }
     }
@@ -650,6 +683,7 @@ fn draw_set_fill(
         pts.push(VPoint { x: vxl + off, y: vyb2 });
     }
     canvas.fill_polygon_rule(&pts, set.fill_pen.color, set.fill_pen.pattern, set.fill_rule);
+    canvas.set_alpha(255);
 }
 
 /// Baseline Y value for baseline fills (Grace `setybase`).
@@ -682,6 +716,8 @@ fn draw_set_line(
     if n < 2 {
         return;
     }
+    // Line pen alpha (drawsetline sets the line pen; QtGrace ALPHA_CHANNELS).
+    canvas.set_alpha(set.line_pen.alpha);
 
     // Convert points to view coordinates. Out-of-domain values (e.g. y <= 0
     // on a log axis) map to view 0 and the viewport clip trims the segment,
@@ -711,6 +747,7 @@ fn draw_set_line(
             }
             i += group;
         }
+        canvas.set_alpha(255);
         return;
     }
 
@@ -730,6 +767,7 @@ fn draw_set_line(
     if segment.len() >= 2 {
         canvas.draw_polyline(&segment, set.line_pen.color, set.linewidth, set.linestyle);
     }
+    canvas.set_alpha(255);
 }
 
 /// Draw the plot symbol at each data point of a set.
@@ -848,6 +886,9 @@ fn draw_one_symbol(canvas: &mut Canvas, set: &Set, c: VPoint, r: f64, fill: bool
     // 0, JUST_CENTER|JUST_MIDDLE, buf)). `r` is 0.01*symsize, so recover the
     // Grace char size.
     if set.symbol == SymbolType::Char {
+        // Char symbols draw with the symbol pen, alpha included (drawxysym:
+        // setalpha(sympen.alpha) before WriteString).
+        canvas.set_alpha(set.symbol_pen.alpha);
         let s = char::from(set.symbol_char).to_string();
         canvas.draw_text(
             c,
@@ -859,6 +900,7 @@ fn draw_one_symbol(canvas: &mut Canvas, set: &Set, c: VPoint, r: f64, fill: bool
             crate::render::VAlign::Middle,
             0.0,
         );
+        canvas.set_alpha(255);
         return;
     }
 
@@ -897,24 +939,34 @@ fn draw_one_symbol(canvas: &mut Canvas, set: &Set, c: VPoint, r: f64, fill: bool
         _ => None,
     };
 
+    // Symbol interiors fill with the symbol fill pen's alpha, outlines
+    // stroke with the symbol pen's (drawxysym: setpen(fillpen) then
+    // setalpha(sympen.alpha); the xycolor per-point override replaces the
+    // color only, drawsetline keeps fillpen.alpha = symfillpen.alpha).
     if let Some(pts) = poly {
         if fill {
+            canvas.set_alpha(set.symbol_fill.alpha);
             canvas.fill_polygon(&pts, fc, set.symbol_fill.pattern);
         }
         if outline {
+            canvas.set_alpha(set.symbol_pen.alpha);
             let mut closed = pts.clone();
             closed.push(pts[0]);
             canvas.draw_polyline(&closed, oc, lw, ls);
         }
+        canvas.set_alpha(255);
         return;
     }
 
+    canvas.set_alpha(set.symbol_pen.alpha);
     match set.symbol {
         SymbolType::Circle => {
             if fill {
+                canvas.set_alpha(set.symbol_fill.alpha);
                 canvas.fill_circle(c, r, fc, set.symbol_fill.pattern);
             }
             if outline {
+                canvas.set_alpha(set.symbol_pen.alpha);
                 canvas.stroke_circle(c, r, oc, lw, ls);
             }
         }
@@ -938,6 +990,7 @@ fn draw_one_symbol(canvas: &mut Canvas, set: &Set, c: VPoint, r: f64, fill: bool
         // Char symbols are deferred (rare); None already returned above.
         _ => {}
     }
+    canvas.set_alpha(255);
 }
 
 /// Axis-aligned rectangle (4 corners) centered at `c` with half-extents.
