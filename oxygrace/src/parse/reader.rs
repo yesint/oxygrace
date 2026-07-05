@@ -242,10 +242,11 @@ fn flush_data(project: &mut Project, cur: &mut Cursor) {
     let graph = project.graph_mut(g);
     let set = graph.set_mut(s, &defaults);
     set.set_type = cur.data_type;
-    set.data.cols = (0..ncols)
+    let data = std::sync::Arc::make_mut(&mut set.data);
+    data.cols = (0..ncols)
         .map(|c| rows.iter().filter_map(|r| r.get(c).copied()).collect())
         .collect();
-    set.data.strs = row_strs;
+    data.strs = row_strs;
 }
 
 /// Apply a parsed command to the project, updating the cursor as needed.

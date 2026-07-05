@@ -24,7 +24,7 @@ fn million_point_project(symbols: bool) -> Project {
     let xs: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 100.0).collect();
     let ys: Vec<f64> = xs.iter().map(|x| (x * 0.5).sin() + 0.2 * noise()).collect();
     let set = g.set_mut(0, &Default::default());
-    set.data.cols = vec![xs, ys];
+    std::sync::Arc::make_mut(&mut set.data).cols = vec![xs, ys];
     if symbols {
         set.symbol = SymbolType::Circle;
         set.symbol_size = 0.3;

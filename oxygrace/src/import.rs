@@ -59,17 +59,18 @@ pub fn import_data_str(
                     .filter(|r| r.len() > c)
                     .map(|r| (r[0], r[c]))
                     .unzip();
-                set.data.cols = vec![xs, ys];
+                std::sync::Arc::make_mut(&mut set.data).cols = vec![xs, ys];
                 g.sets.push(set);
             }
         } else {
             let ncols = set_type.ncols().min(max_cols);
             let mut set = Set::with_defaults(&defaults);
             set.set_type = set_type;
-            set.data.cols = (0..ncols)
+            let data = std::sync::Arc::make_mut(&mut set.data);
+            data.cols = (0..ncols)
                 .map(|c| rows.iter().filter_map(|r| r.get(c).copied()).collect())
                 .collect();
-            set.data.strs = strs;
+            data.strs = strs;
             g.sets.push(set);
         }
     }

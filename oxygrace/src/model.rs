@@ -6,6 +6,8 @@
 //! `src/defines.h`) but keep only what the renderer needs, with idiomatic
 //! Rust types. Fields default to Grace's documented defaults via [`Default`].
 
+use std::sync::Arc;
+
 pub mod defaults;
 pub mod enums;
 
@@ -398,7 +400,10 @@ impl Dataset {
 pub struct Set {
     pub hidden: bool,
     pub set_type: SetType,
-    pub data: Dataset,
+    /// Point data, `Arc`-shared so cloning a [`Project`] (e.g. a GUI undo
+    /// snapshot per edit) bumps a refcount instead of copying the columns.
+    /// Mutate through [`Arc::make_mut`].
+    pub data: Arc<Dataset>,
     pub legend: String,
     pub comment: String,
 
@@ -524,7 +529,7 @@ impl Set {
         Set {
             hidden: false,
             set_type: SetType::Xy,
-            data: Dataset::default(),
+            data: Arc::default(),
             legend: String::new(),
             comment: String::new(),
             symbol: SymbolType::None,

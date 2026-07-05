@@ -4,8 +4,9 @@
 
 use oxygrace::Project;
 
-/// Bound on stored snapshots (each is a full model clone; the dominant cost
-/// is the `Dataset` vectors, fine for typical files).
+/// Bound on stored snapshots. Each is a full model clone, but the point
+/// data is `Arc`-shared (`Set::data`), so even huge datasets cost only a
+/// refcount bump per snapshot — the clone copies styling structs only.
 const LIMIT: usize = 50;
 
 #[derive(Default)]
