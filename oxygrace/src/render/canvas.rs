@@ -500,12 +500,13 @@ impl<'a> Canvas<'a> {
             return;
         };
         self.fill_path_pen(&path, color, pattern);
-        self.record(RecordShape::Rect(Bounds {
-            x0: cx - r,
-            y0: cy - r,
-            x1: cx + r,
-            y1: cy + r,
-        }));
+        self.record(RecordShape::Ellipse {
+            cx,
+            cy,
+            rx: r,
+            ry: r,
+            ring_half_width: None,
+        });
     }
 
     /// Stroke a circle outline (center + radius in view units).
@@ -525,12 +526,15 @@ impl<'a> Canvas<'a> {
         let dash = dash_pattern(ls, width);
         let rgba = color::resolve(self.project, color);
         self.backend.stroke_path(&path, rgba, width, dash.as_deref());
-        self.record(RecordShape::Rect(Bounds {
-            x0: cx - r,
-            y0: cy - r,
-            x1: cx + r,
-            y1: cy + r,
-        }));
+        // The ring: a hollow circle's center doesn't capture clicks (small
+        // symbols stay clickable in the middle through the hit tolerance).
+        self.record(RecordShape::Ellipse {
+            cx,
+            cy,
+            rx: r,
+            ry: r,
+            ring_half_width: Some(width / 2.0),
+        });
     }
 
     /// Build the oval path inscribed in a view-coordinate rectangle.
@@ -541,24 +545,29 @@ impl<'a> Canvas<'a> {
         PathBuilder::from_oval(rect)
     }
 
-    /// Bounds of a path as recorded for hit-testing.
-    fn record_path_bounds(&mut self, path: &Path) {
-        if self.recorder.is_some() {
-            let b = path.bounds();
-            self.record(RecordShape::Rect(Bounds {
-                x0: b.left(),
-                y0: b.top(),
-                x1: b.right(),
-                y1: b.bottom(),
-            }));
+    /// Record the ellipse inscribed in a view rectangle: a disk, or only the
+    /// outline ring when `ring_half_width` is set — a hollow ellipse's empty
+    /// center must not capture clicks aimed at elements visible through it.
+    fn record_ellipse(&mut self, p1: VPoint, p2: VPoint, ring_half_width: Option<f32>) {
+        if self.recorder.is_none() {
+            return;
         }
+        let (x1, y1) = self.page.view_to_device(p1.x, p1.y);
+        let (x2, y2) = self.page.view_to_device(p2.x, p2.y);
+        self.record(RecordShape::Ellipse {
+            cx: (x1 + x2) / 2.0,
+            cy: (y1 + y2) / 2.0,
+            rx: (x2 - x1).abs() / 2.0,
+            ry: (y2 - y1).abs() / 2.0,
+            ring_half_width,
+        });
     }
 
     /// Fill the ellipse inscribed in the rectangle spanned by two view points.
     pub fn fill_ellipse(&mut self, p1: VPoint, p2: VPoint, color: i32, pattern: i32) {
         let Some(path) = self.oval_path(p1, p2) else { return };
         self.fill_path_pen(&path, color, pattern);
-        self.record_path_bounds(&path);
+        self.record_ellipse(p1, p2, None);
     }
 
     /// Stroke the ellipse inscribed in the rectangle spanned by two view points.
@@ -571,7 +580,7 @@ impl<'a> Canvas<'a> {
         let dash = dash_pattern(ls, width);
         let rgba = color::resolve(self.project, color);
         self.backend.stroke_path(&path, rgba, width, dash.as_deref());
-        self.record_path_bounds(&path);
+        self.record_ellipse(p1, p2, Some(width / 2.0));
     }
 
     /// Draw a marked-up string anchored at a view point.
@@ -606,13 +615,21 @@ impl<'a> Canvas<'a> {
 
         // Axis-aligned bounding box of the *rotated* glyph outlines, in em
         // units (Y up) — Grace's `bbox_ll`/`bbox_ur` accumulated in WriteString.
+        // The unrotated box is accumulated alongside: its rotated corners are
+        // the tight hit-test quad for angled text.
         let (mut bx0, mut by0, mut bx1, mut by1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        let (mut ux0, mut uy0, mut ux1, mut uy1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         let mut any = false;
         for g in &layout.glyphs {
             if let Some((gx0, gy0, gx1, gy1)) = self.fonts.glyph_bbox(g.font, g.ch) {
                 for &(cx, cy) in &[(gx0, gy0), (gx1, gy0), (gx1, gy1), (gx0, gy1)] {
                     let (mx, my) = g.tm.apply(cx, cy);
-                    let (rx, ry) = rot(g.x + mx, g.y + my);
+                    let (px, py) = (g.x + mx, g.y + my);
+                    ux0 = ux0.min(px);
+                    uy0 = uy0.min(py);
+                    ux1 = ux1.max(px);
+                    uy1 = uy1.max(py);
+                    let (rx, ry) = rot(px, py);
                     bx0 = bx0.min(rx);
                     by0 = by0.min(ry);
                     bx1 = bx1.max(rx);
@@ -646,15 +663,28 @@ impl<'a> Canvas<'a> {
             (bx0 + hfudge * (bx1 - bx0), by0 + vfudge * (by1 - by0))
         };
 
-        // Hit-test record: the whole string's rotated bbox in device pixels
-        // (one rect per string, not per glyph).
+        // Hit-test record, one shape per string (not per glyph): axis-aligned
+        // text records its device bbox; angled text records the tight rotated
+        // quad instead (the axis-aligned bbox of diagonal text overstates by
+        // up to √2 and would capture clicks aimed at what's underneath).
         if self.recorder.is_some() {
-            self.record(RecordShape::Rect(Bounds {
-                x0: ax + em_px * (bx0 - fx),
-                y0: ay - em_px * (by1 - fy),
-                x1: ax + em_px * (bx1 - fx),
-                y1: ay - em_px * (by0 - fy),
-            }));
+            if (sin * cos).abs() < 1e-6 {
+                self.record(RecordShape::Rect(Bounds {
+                    x0: ax + em_px * (bx0 - fx),
+                    y0: ay - em_px * (by1 - fy),
+                    x1: ax + em_px * (bx1 - fx),
+                    y1: ay - em_px * (by0 - fy),
+                }));
+            } else {
+                let quad = [(ux0, uy0), (ux1, uy0), (ux1, uy1), (ux0, uy1)]
+                    .into_iter()
+                    .map(|(qx, qy)| {
+                        let (rx, ry) = rot(qx, qy);
+                        (ax + em_px * (rx - fx), ay - em_px * (ry - fy))
+                    })
+                    .collect();
+                self.record(RecordShape::Quad(quad));
+            }
         }
 
         let default_color = color::resolve(self.project, color);

@@ -83,12 +83,27 @@ pub enum OverlayShape<'a> {
 /// The device-space geometry recorded for one primitive.
 #[derive(Debug, Clone)]
 pub(crate) enum RecordShape {
-    /// Filled region: hit when the point is inside (or within `tol` of an edge).
+    /// Filled region: hit when the point is inside (or within `tol` of an
+    /// edge). Fills are opaque, so they also occlude records below them.
     Polygon(Vec<(f32, f32)>),
-    /// Stroked path: hit within `max(half_width, tol)` of any segment.
+    /// Stroked path: hit within `half_width + tol` of any segment.
     Polyline { pts: Vec<(f32, f32)>, half_width: f32 },
-    /// Bounding box only (text, symbols, circles/ellipses).
+    /// Bounding box (axis-aligned text, odd symbols).
     Rect(Bounds),
+    /// Rotated text box (4 corners): direct-ink semantics like [`Rect`],
+    /// but tight around angled text — the axis-aligned bbox of diagonal
+    /// text overstates by up to √2 and steals clicks from what is under it.
+    Quad(Vec<(f32, f32)>),
+    /// Axis-aligned ellipse: a filled disk when `ring_half_width` is
+    /// `None`, otherwise only the outline ring hits (a hollow ellipse's
+    /// empty center must not capture clicks aimed through it).
+    Ellipse {
+        cx: f32,
+        cy: f32,
+        rx: f32,
+        ry: f32,
+        ring_half_width: Option<f32>,
+    },
 }
 
 #[derive(Debug)]
@@ -162,10 +177,11 @@ impl RenderInfo {
                     continue;
                 }
             }
-            // Pre-filter: a stroke's ink extends half_width beyond the bbox
+            // Pre-filter: stroked ink extends half_width beyond the bbox
             // of its centerline points.
             let slack = match &r.shape {
                 RecordShape::Polyline { half_width, .. } => half_width + tol,
+                RecordShape::Ellipse { ring_half_width: Some(hw), .. } => hw + tol,
                 _ => tol,
             };
             if !r.bbox.contains(x, y, slack) {
@@ -176,6 +192,18 @@ impl RenderInfo {
             let hit = match &r.shape {
                 RecordShape::Rect(b) => {
                     let d = dist_to_rect(b, x, y);
+                    (d <= tol).then_some((0u8, d))
+                }
+                RecordShape::Quad(pts) => {
+                    let d = if point_in_polygon(pts, x, y) {
+                        0.0
+                    } else {
+                        dist_to_polyline(pts, x, y, true)
+                    };
+                    (d <= tol).then_some((0u8, d))
+                }
+                RecordShape::Ellipse { cx, cy, rx, ry, ring_half_width } => {
+                    let d = dist_to_ellipse(*cx, *cy, *rx, *ry, *ring_half_width, x, y);
                     (d <= tol).then_some((0u8, d))
                 }
                 RecordShape::Polygon(pts) => {
@@ -240,8 +268,10 @@ impl RenderInfo {
                     pts,
                     half_width: *half_width,
                 },
-                RecordShape::Polygon(pts) => OverlayShape::Polygon(pts),
+                RecordShape::Polygon(pts) | RecordShape::Quad(pts) => OverlayShape::Polygon(pts),
                 RecordShape::Rect(b) => OverlayShape::Rect(*b),
+                // Highlights draw the bounding box for ellipses.
+                RecordShape::Ellipse { .. } => OverlayShape::Rect(r.bbox),
             };
             (r.clip, shape)
         })
@@ -330,12 +360,18 @@ impl Recorder {
         let Some(&id) = self.stack.last() else { return };
         let bbox = match &shape {
             RecordShape::Rect(b) => *b,
-            RecordShape::Polygon(pts) | RecordShape::Polyline { pts, .. } => {
-                match Bounds::from_points(pts) {
-                    Some(b) => b,
-                    None => return,
-                }
-            }
+            RecordShape::Polygon(pts)
+            | RecordShape::Quad(pts)
+            | RecordShape::Polyline { pts, .. } => match Bounds::from_points(pts) {
+                Some(b) => b,
+                None => return,
+            },
+            RecordShape::Ellipse { cx, cy, rx, ry, .. } => Bounds {
+                x0: cx - rx,
+                y0: cy - ry,
+                x1: cx + rx,
+                y1: cy + ry,
+            },
         };
         let area = ink_area(&shape);
         self.info
@@ -401,10 +437,37 @@ fn dist_to_rect(b: &Bounds, x: f32, y: f32) -> f32 {
 fn ink_area(shape: &RecordShape) -> f32 {
     match shape {
         RecordShape::Rect(b) => ((b.x1 - b.x0) * (b.y1 - b.y0)).max(1.0),
-        RecordShape::Polygon(pts) => polygon_area(pts).max(1.0),
+        RecordShape::Polygon(pts) | RecordShape::Quad(pts) => polygon_area(pts).max(1.0),
         RecordShape::Polyline { pts, half_width } => {
             (polyline_len(pts) * (2.0 * half_width).max(1.0)).max(1.0)
         }
+        RecordShape::Ellipse { rx, ry, ring_half_width, .. } => {
+            let a = match ring_half_width {
+                None => std::f32::consts::PI * rx * ry,
+                // Ring ink ≈ perimeter (Ramanujan) × stroke width.
+                Some(hw) => {
+                    let p = std::f32::consts::PI
+                        * (3.0 * (rx + ry) - ((3.0 * rx + ry) * (rx + 3.0 * ry)).sqrt());
+                    p * (2.0 * hw).max(1.0)
+                }
+            };
+            a.max(1.0)
+        }
+    }
+}
+
+/// Approximate distance to an ellipse: 0 inside the disk (or on the ring),
+/// else the normalized radial gap scaled by the smaller semi-axis. Exact
+/// for circles, adequate within hit tolerances for moderate aspect ratios.
+fn dist_to_ellipse(cx: f32, cy: f32, rx: f32, ry: f32, ring: Option<f32>, x: f32, y: f32) -> f32 {
+    if rx <= 0.0 || ry <= 0.0 {
+        return f32::INFINITY;
+    }
+    let rn = ((x - cx) / rx).hypot((y - cy) / ry);
+    let rmin = rx.min(ry);
+    match ring {
+        None => ((rn - 1.0) * rmin).max(0.0),
+        Some(hw) => ((rn - 1.0).abs() * rmin - hw).max(0.0),
     }
 }
 
@@ -564,6 +627,62 @@ mod tests {
         let info = rec.finish();
         // 6px above the centerline start: on the ink (half_width 8), tol 1.
         assert_eq!(info.hit_test(10.0, 44.0, 1.0), Some(set));
+    }
+
+    /// Angled text records a tight quad: points inside its axis-aligned
+    /// bbox but outside the rotated box must not hit.
+    #[test]
+    fn quad_hits_tight_rotated_box() {
+        let s = ElementId::StringObj(0);
+        let mut rec = Recorder::default();
+        rec.push(s);
+        // A 45°-rotated box: the diamond |x−50| + |y−50| ≤ 20.
+        rec.record(RecordShape::Quad(vec![
+            (50.0, 30.0),
+            (70.0, 50.0),
+            (50.0, 70.0),
+            (30.0, 50.0),
+        ]));
+        rec.pop();
+        let info = rec.finish();
+        assert_eq!(info.hit_test(50.0, 50.0, 2.0), Some(s));
+        // Inside the AABB (30..70)², ~10px from the diamond: no hit.
+        assert_eq!(info.hit_test(33.0, 33.0, 2.0), None);
+    }
+
+    /// Hollow ellipses hit only near their ring; disks hit anywhere inside;
+    /// the bbox corner (outside the ellipse) hits neither.
+    #[test]
+    fn ellipse_ring_and_disk() {
+        let ring_id = ElementId::EllipseObj(0);
+        let disk_id = ElementId::EllipseObj(1);
+        let mut rec = Recorder::default();
+        rec.push(ring_id);
+        rec.record(RecordShape::Ellipse {
+            cx: 50.0,
+            cy: 50.0,
+            rx: 30.0,
+            ry: 20.0,
+            ring_half_width: Some(1.0),
+        });
+        rec.pop();
+        rec.push(disk_id);
+        rec.record(RecordShape::Ellipse {
+            cx: 200.0,
+            cy: 50.0,
+            rx: 30.0,
+            ry: 20.0,
+            ring_half_width: None,
+        });
+        rec.pop();
+        let info = rec.finish();
+        // Ring: empty center misses, boundary hits, bbox corner misses.
+        assert_eq!(info.hit_test(50.0, 50.0, 3.0), None);
+        assert_eq!(info.hit_test(80.0, 50.0, 3.0), Some(ring_id));
+        assert_eq!(info.hit_test(78.0, 32.0, 3.0), None);
+        // Disk: center and boundary hit.
+        assert_eq!(info.hit_test(200.0, 50.0, 3.0), Some(disk_id));
+        assert_eq!(info.hit_test(230.0, 50.0, 3.0), Some(disk_id));
     }
 
     #[test]
