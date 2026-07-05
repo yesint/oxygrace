@@ -469,13 +469,50 @@ impl App {
     fn toggle_free_aspect(&mut self) {
         if let Some(p) = &mut self.project {
             if self.free_aspect {
-                self.saved_page = Some((p.page_width, p.page_height));
+                if self.saved_page.is_none() {
+                    self.saved_page = Some((p.page_width, p.page_height));
+                }
             } else if let Some((w, h)) = self.saved_page.take() {
                 rescale_views(p, (w, h));
                 p.page_width = w;
                 p.page_height = h;
                 self.dirty = true;
             }
+        }
+    }
+
+    /// Install a freshly opened project, resetting all per-project state
+    /// (selection, in-flight gestures, undo history, free-aspect baseline).
+    pub fn open_project(&mut self, project: Project, path: Option<PathBuf>) {
+        self.project = Some(project);
+        self.path = path;
+        self.selection = None;
+        self.hover = None;
+        self.rotate_armed = None;
+        self.last_click = None;
+        self.drag = None;
+        self.pan = None;
+        self.dirty = true;
+        self.modified = false;
+        self.undo.clear();
+        self.saved_page = None;
+    }
+
+    /// The project as it should be persisted. Free aspect is a *view* mode,
+    /// not an edit: while it is on, the model temporarily carries the
+    /// canvas-stretched page and viewports, so saving un-stretches a copy
+    /// back to the project's own page geometry first.
+    pub fn project_for_save(&self) -> Option<std::borrow::Cow<'_, Project>> {
+        let p = self.project.as_ref()?;
+        match self.saved_page.filter(|_| self.free_aspect) {
+            Some((w, h)) if (p.page_width, p.page_height) != (w, h) => {
+                let mut copy = p.clone();
+                rescale_views(&mut copy, (w, h));
+                copy.page_width = w;
+                copy.page_height = h;
+                Some(std::borrow::Cow::Owned(copy))
+            }
+            _ => Some(std::borrow::Cow::Borrowed(p)),
         }
     }
 }
@@ -676,6 +713,12 @@ impl eframe::App for App {
             if w > 50 && h > 50 {
                 if let Some(p) = &mut self.project {
                     if p.page_width != w || p.page_height != h {
+                        // Capture the pre-stretch page lazily, so a project
+                        // opened (or launched with -free) while the mode is
+                        // already on still restores/saves its own geometry.
+                        if self.saved_page.is_none() {
+                            self.saved_page = Some((p.page_width, p.page_height));
+                        }
                         rescale_views(p, (w, h));
                         p.page_width = w;
                         p.page_height = h;
@@ -745,6 +788,35 @@ impl eframe::App for App {
             .show_inside(ui, |ui| {
                 crate::plot_view::show(self, ui);
             });
+    }
+}
+
+#[cfg(test)]
+mod free_aspect_tests {
+    use super::*;
+
+    /// Stretching to a free-aspect page and back restores the original
+    /// geometry (the un-stretch `project_for_save`/toggle-off relies on).
+    #[test]
+    fn rescale_views_round_trips() {
+        let mut p = Project::default();
+        let g = p.graph_mut(0);
+        g.view = oxygrace::model::View { xmin: 0.15, xmax: 1.15, ymin: 0.10, ymax: 0.85 };
+        let orig = g.view;
+        let from = (p.page_width, p.page_height);
+        rescale_views(&mut p, (1387, 723));
+        p.page_width = 1387;
+        p.page_height = 723;
+        rescale_views(&mut p, from);
+        let v = p.graphs[0].view;
+        for (a, b) in [
+            (v.xmin, orig.xmin),
+            (v.xmax, orig.xmax),
+            (v.ymin, orig.ymin),
+            (v.ymax, orig.ymax),
+        ] {
+            assert!((a - b).abs() < 1e-12, "viewport drifted: {a} vs {b}");
+        }
     }
 }
 

@@ -328,7 +328,8 @@ recomputed from press-time originals each frame so there is no drift.
 `autoscale_world`); free page aspect (View → Free aspect: page follows the
 canvas AND viewports/view-anchored objects rescale with the page extents —
 the postprocess_version stretch — so the plot fills the window; original
-geometry restored on toggle-off); dark/light modes (View →
+geometry restored on toggle-off, and Save writes the un-stretched
+geometry — free aspect is a view mode, not an edit); dark/light modes (View →
 Mode, `theme::apply(ctx, Mode)`); status bar updates on hover (element +
 overlap count); menus switch on hover once one is open; frame edges are
 recorded as axis ink (`record_polyline_view`) so axes are selectable when

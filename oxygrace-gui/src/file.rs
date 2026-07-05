@@ -74,12 +74,7 @@ pub fn open_loaded(app: &mut App, name: String, content: String) {
         project.graphs.len(),
         if project.graphs.len() == 1 { "" } else { "s" }
     );
-    app.project = Some(project);
-    app.path = Some(PathBuf::from(name));
-    app.selection = None;
-    app.dirty = true;
-    app.modified = false;
-    app.undo.clear();
+    app.open_project(project, Some(PathBuf::from(name)));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -92,12 +87,7 @@ pub fn open_path(app: &mut App, path: PathBuf) {
                 project.graphs.len(),
                 if project.graphs.len() == 1 { "" } else { "s" }
             );
-            app.project = Some(project);
-            app.path = Some(path);
-            app.selection = None;
-            app.dirty = true;
-            app.modified = false;
-            app.undo.clear();
+            app.open_project(project, Some(path));
         }
         Err(e) => {
             app.status = format!("Failed to open {}: {e}", path.display());
@@ -138,8 +128,11 @@ pub fn save_as(app: &mut App) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn write_to(app: &mut App, path: PathBuf) {
-    let Some(project) = &app.project else { return };
-    match oxygrace::save(project, &path) {
+    // Free aspect is a view mode: persist the un-stretched geometry.
+    let Some(project) = app.project_for_save() else { return };
+    let result = oxygrace::save(&project, &path);
+    drop(project);
+    match result {
         Ok(()) => {
             app.status = format!("Saved {}", path.display());
             app.path = Some(path);
@@ -159,14 +152,16 @@ pub fn save(app: &mut App) {
 
 #[cfg(target_arch = "wasm32")]
 pub fn save_as(app: &mut App) {
-    let Some(project) = &app.project else { return };
+    // Free aspect is a view mode: persist the un-stretched geometry.
+    let Some(project) = app.project_for_save() else { return };
+    let content = oxygrace::save_str(&project);
+    drop(project);
     let name = app
         .path
         .as_ref()
         .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "untitled.agr".into());
-    let content = oxygrace::save_str(project);
     match download(&name, &content) {
         Ok(()) => {
             app.status = format!("Downloaded {name}");
