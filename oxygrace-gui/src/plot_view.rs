@@ -224,9 +224,9 @@ fn select_interactions(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: 
 /// Pan tool: drag to shift the world window of the graph under the cursor.
 fn handle_pan(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap) {
     if app.pan.is_some() {
-        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     } else if resp.hovered() {
-        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
     if resp.hover_pos().is_some() && app.pan.is_none() {
         app.status = "Pan: drag to move the view".into();
@@ -272,7 +272,7 @@ fn handle_pan(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap) 
 /// Autoscale-to-set tool: click a set to fit its graph to that set.
 fn handle_pick_set(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap, tol: f32) {
     if resp.hovered() {
-        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Crosshair);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         app.status = "Click a set to autoscale its graph to it".into();
     }
     if resp.clicked() {
@@ -478,12 +478,12 @@ fn cursor_for(h: Handle) -> egui::CursorIcon {
 fn handle_drag(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap, cands: &[ElementId]) {
     // Cursor feedback.
     if app.drag.is_some() {
-        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     } else if let Some(pos) = resp.hover_pos() {
         if let Some(h) = handle_at(app, pos, vm) {
-            ui.output_mut(|o| o.cursor_icon = cursor_for(h));
+            ui.ctx().set_cursor_icon(cursor_for(h));
         } else if app.hover.is_some_and(draggable) {
-            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
     }
 
@@ -829,10 +829,7 @@ fn highlight(
             // of clipped data don't stretch outside the graph viewport.
             let painter = &match clip {
                 Some(c) => {
-                    let r = egui::Rect::from_min_max(
-                        vm.to_screen(c.x0, c.y0),
-                        vm.to_screen(c.x1, c.y1),
-                    );
+                    let r = bounds_to_screen(c, vm);
                     painter.with_clip_rect(r.intersect(painter.clip_rect()))
                 }
                 None => painter.clone(),
@@ -865,11 +862,7 @@ fn highlight(
                     painter.add(egui::Shape::closed_line(line, egui::Stroke::new(2.0, accent)));
                 }
                 oxygrace::OverlayShape::Rect(b) => {
-                    let r = egui::Rect::from_min_max(
-                        vm.to_screen(b.x0, b.y0),
-                        vm.to_screen(b.x1, b.y1),
-                    )
-                    .expand(1.5);
+                    let r = bounds_to_screen(b, vm).expand(1.5);
                     painter.rect_stroke(r, 1.0, egui::Stroke::new(3.5, halo), egui::StrokeKind::Outside);
                     painter.rect_stroke(r, 1.0, egui::Stroke::new(1.5, accent), egui::StrokeKind::Outside);
                 }
@@ -915,13 +908,14 @@ fn screen_polyline(pts: &[(f32, f32)], vm: ViewMap) -> Vec<egui::Pos2> {
     out
 }
 
+/// Device-space bounds → screen rect.
+fn bounds_to_screen(b: oxygrace::render::Bounds, vm: ViewMap) -> egui::Rect {
+    egui::Rect::from_min_max(vm.to_screen(b.x0, b.y0), vm.to_screen(b.x1, b.y1))
+}
+
 /// Screen-space bounding rect of an element's recorded geometry.
 fn bounds_on_screen(info: &oxygrace::RenderInfo, id: oxygrace::ElementId, vm: ViewMap) -> Option<egui::Rect> {
-    let b = info.bounds(id)?;
-    Some(egui::Rect::from_min_max(
-        vm.to_screen(b.x0, b.y0),
-        vm.to_screen(b.x1, b.y1),
-    ))
+    Some(bounds_to_screen(info.bounds(id)?, vm))
 }
 
 #[cfg(test)]

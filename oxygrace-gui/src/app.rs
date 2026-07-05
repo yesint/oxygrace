@@ -287,9 +287,7 @@ impl App {
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("menu").show_inside(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                // Collect bar-button responses so an open menu follows hover.
-                let mut bar_buttons: Vec<egui::Response> = Vec::new();
-                let (resp, _) = egui::containers::menu::MenuButton::new("File").ui(ui, |ui| {
+                let (file_resp, _) = egui::containers::menu::MenuButton::new("File").ui(ui, |ui| {
                     if ui.button("Open…").clicked() {
                         crate::file::open_dialog(self);
                     }
@@ -312,8 +310,7 @@ impl App {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
-                bar_buttons.push(resp);
-                let (resp, _) = egui::containers::menu::MenuButton::new("Edit").ui(ui, |ui| {
+                let (edit_resp, _) = egui::containers::menu::MenuButton::new("Edit").ui(ui, |ui| {
                     let undo_text = match self.undo.undo_label() {
                         Some(l) => format!("Undo {l}"),
                         None => "Undo".into(),
@@ -335,8 +332,7 @@ impl App {
                         self.redo_action();
                     }
                 });
-                bar_buttons.push(resp);
-                let (resp, _) = egui::containers::menu::MenuButton::new("View").ui(ui, |ui| {
+                let (view_resp, _) = egui::containers::menu::MenuButton::new("View").ui(ui, |ui| {
                     if ui
                         .checkbox(&mut self.free_aspect, "Free aspect")
                         .on_hover_text("Page follows the window size (xmgrace -free)")
@@ -350,22 +346,7 @@ impl App {
                     ui.radio_value(&mut self.theme_pref, crate::theme::Pref::Dark, "Dark");
                     ui.radio_value(&mut self.theme_pref, crate::theme::Pref::Light, "Light");
                 });
-                bar_buttons.push(resp);
-
-                // Open menus follow hover across the bar (one was clicked →
-                // hovering a sibling switches to it).
-                let ctx = ui.ctx().clone();
-                let ids: Vec<egui::Id> = bar_buttons
-                    .iter()
-                    .map(egui::Popup::default_response_id)
-                    .collect();
-                if ids.iter().any(|id| egui::Popup::is_id_open(&ctx, *id)) {
-                    for (resp, id) in bar_buttons.iter().zip(&ids) {
-                        if resp.hovered() && !egui::Popup::is_id_open(&ctx, *id) {
-                            egui::Popup::open_id(&ctx, *id);
-                        }
-                    }
-                }
+                menu_hover_follow(ui.ctx(), &[file_resp, edit_resp, view_resp]);
             });
         });
     }
@@ -412,52 +393,33 @@ impl App {
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         use crate::icons::{icon_button, Icon};
         let has = self.project.is_some();
+        // A toolbar button, disabled while no project is open.
+        let btn = |ui: &mut egui::Ui, icon: Icon, tip: &str, active: bool| {
+            ui.add_enabled_ui(has, |ui| icon_button(ui, icon, tip, active))
+                .inner
+        };
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
             if icon_button(ui, Icon::Open, "Open… (Ctrl+O)", false).clicked() {
                 crate::file::open_dialog(self);
             }
-            let save = ui
-                .add_enabled_ui(has, |ui| icon_button(ui, Icon::Save, "Save (Ctrl+S)", false))
-                .inner;
-            if save.clicked() {
+            if btn(ui, Icon::Save, "Save (Ctrl+S)", false).clicked() {
                 crate::file::save(self);
             }
-            let asa = ui
-                .add_enabled_ui(has, |ui| {
-                    icon_button(ui, Icon::AutoscaleAll, "Autoscale all visible sets", false)
-                })
-                .inner;
-            if asa.clicked() {
+            if btn(ui, Icon::AutoscaleAll, "Autoscale all visible sets", false).clicked() {
                 self.autoscale_all();
             }
-            let ass = ui
-                .add_enabled_ui(has, |ui| {
-                    icon_button(
-                        ui,
-                        Icon::AutoscaleSet,
-                        "Autoscale to a set — then click a set",
-                        self.tool == Tool::PickSet,
-                    )
-                })
-                .inner;
-            if ass.clicked() {
+            let pick = self.tool == Tool::PickSet;
+            if btn(ui, Icon::AutoscaleSet, "Autoscale to a set — then click a set", pick).clicked()
+            {
                 self.set_tool(Tool::PickSet);
             }
-            let pan = ui
-                .add_enabled_ui(has, |ui| {
-                    icon_button(ui, Icon::Pan, "Pan — drag to move the view", self.tool == Tool::Pan)
-                })
-                .inner;
-            if pan.clicked() {
+            let pan = self.tool == Tool::Pan;
+            if btn(ui, Icon::Pan, "Pan — drag to move the view", pan).clicked() {
                 self.set_tool(Tool::Pan);
             }
-            let free = ui
-                .add_enabled_ui(has, |ui| {
-                    icon_button(ui, Icon::FreeAspect, "Free aspect (page fills the window)", self.free_aspect)
-                })
-                .inner;
-            if free.clicked() {
+            let free = self.free_aspect;
+            if btn(ui, Icon::FreeAspect, "Free aspect (page fills the window)", free).clicked() {
                 self.free_aspect = !self.free_aspect;
                 self.toggle_free_aspect();
             }
@@ -566,6 +528,24 @@ fn rescale_views(p: &mut Project, to: (u32, u32)) {
     }
     p.timestamp.x *= ex;
     p.timestamp.y *= ey;
+}
+
+/// Once a menu-bar menu is open, hovering a sibling bar button switches to
+/// it (standard menu-bar UX). egui 0.34's `MenuBar` opens top-level menus
+/// on click only — re-evaluate on egui upgrades and delete if `MenuBar`
+/// learns this natively.
+fn menu_hover_follow(ctx: &egui::Context, bar_buttons: &[egui::Response]) {
+    let ids: Vec<egui::Id> = bar_buttons
+        .iter()
+        .map(egui::Popup::default_response_id)
+        .collect();
+    if ids.iter().any(|id| egui::Popup::is_id_open(ctx, *id)) {
+        for (resp, id) in bar_buttons.iter().zip(&ids) {
+            if resp.hovered() && !egui::Popup::is_id_open(ctx, *id) {
+                egui::Popup::open_id(ctx, *id);
+            }
+        }
+    }
 }
 
 /// Parse `OXYGRACE_GUI_SELECT` specs like `graph:0`, `set:0:1`, `axis:0:0`,

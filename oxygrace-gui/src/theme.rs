@@ -75,6 +75,6 @@ pub fn apply(ctx: &egui::Context, mode: Mode) {
     }
     visuals.hyperlink_color = ACCENT;
     ctx.global_style_mut(|style| {
-        style.visuals = visuals.clone();
+        style.visuals = visuals;
     });
 }
