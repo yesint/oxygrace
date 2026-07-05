@@ -30,27 +30,78 @@ const LINESTYLE_NAMES: [&str; 9] = [
     "Dash-dot-dash",
 ];
 
-/// Fixed-width, left-aligned, truncating label cell.
-fn label_cell(ui: &mut egui::Ui, text: &str) {
-    let size = egui::vec2(LABEL_WIDTH, ui.spacing().interact_size.y);
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    let mut child = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(rect)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    child.add(egui::Label::new(text).truncate());
+/// One `label | control` row: a fixed-width, vertically centered,
+/// truncating label, then the control in the remaining width. Every row
+/// goes through this, so all pages share one rhythm.
+fn row<R>(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.horizontal(|ui| {
+        let size = egui::vec2(LABEL_WIDTH, ui.spacing().interact_size.y);
+        ui.allocate_ui_with_layout(
+            size,
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_min_size(size);
+                ui.add(egui::Label::new(label).truncate());
+            },
+        );
+        control(ui)
+    })
+    .inner
 }
 
-/// Elastic control width: whatever is left after the label, minus slack.
-fn control_width(ui: &egui::Ui, reserve: f32) -> f32 {
-    (ui.available_width() - reserve).max(40.0)
+/// Elastic control width: the remaining row width minus the item gap, so
+/// the control fills the panel without setting a minimum panel width.
+fn control_width(ui: &egui::Ui) -> f32 {
+    (ui.available_width() - ui.spacing().item_spacing.x).max(40.0)
 }
 
 /// A small −/+ stepper button; returns true when clicked.
 fn step_button(ui: &mut egui::Ui, glyph: &str) -> bool {
     ui.add(egui::Button::new(glyph).min_size(egui::vec2(20.0, 18.0)))
         .clicked()
+}
+
+/// The shared − / drag-or-type / + spin control behind [`num`] and [`int`]:
+/// returns `Some((new value, live))` when edited (`live` = mid-gesture, so
+/// successive arrow clicks / drag frames coalesce into one undo step).
+fn spin<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    label: &str,
+    v: T,
+    speed: f64,
+    step: f64,
+    decimals: usize,
+    range: Option<std::ops::RangeInclusive<T>>,
+) -> Option<(T, bool)> {
+    row(ui, label, |ui| {
+        let mut val = v;
+        let mut changed = false;
+        let mut live = false;
+        let clamp = |x: f64| match &range {
+            Some(r) => x.clamp(r.start().to_f64(), r.end().to_f64()),
+            None => x,
+        };
+        if step_button(ui, "−") {
+            val = T::from_f64(clamp(v.to_f64() - step));
+            changed |= val != v;
+            live = true;
+        }
+        let mut dv = egui::DragValue::new(&mut val).speed(speed).max_decimals(decimals);
+        if let Some(r) = &range {
+            dv = dv.range(r.clone());
+        }
+        let resp = ui.add(dv);
+        if resp.changed() {
+            changed = true;
+            live = resp.dragged();
+        }
+        if step_button(ui, "+") {
+            val = T::from_f64(clamp(v.to_f64() + step));
+            changed |= val != v;
+            live = true;
+        }
+        changed.then_some((val, live))
+    })
 }
 
 /// A float spin box: − / drag-or-type / + (arrows step by 10× the drag
@@ -64,31 +115,9 @@ pub fn num(
     ulabel: &'static str,
     set: impl FnOnce(&mut Project, f64) + 'static,
 ) {
-    let mut val = v;
-    let step = speed * 10.0;
-    ui.horizontal(|ui| {
-        label_cell(ui, label);
-        let mut live = false;
-        let mut changed = false;
-        if step_button(ui, "−") {
-            val -= step;
-            changed = true;
-            live = true; // successive arrow clicks coalesce into one undo step
-        }
-        let resp = ui.add(egui::DragValue::new(&mut val).speed(speed).max_decimals(6));
-        if resp.changed() {
-            changed = true;
-            live = resp.dragged();
-        }
-        if step_button(ui, "+") {
-            val += step;
-            changed = true;
-            live = true;
-        }
-        if changed {
-            edits.push(Edit::new(ulabel, val, live, set));
-        }
-    });
+    if let Some((val, live)) = spin(ui, label, v, speed, speed * 10.0, 6, None) {
+        edits.push(Edit::new(ulabel, val, live, set));
+    }
 }
 
 /// An integer spin box, clamped to `range` (arrows step by 1).
@@ -101,30 +130,9 @@ pub fn int(
     ulabel: &'static str,
     set: impl FnOnce(&mut Project, i32) + 'static,
 ) {
-    let mut val = v;
-    ui.horizontal(|ui| {
-        label_cell(ui, label);
-        let mut live = false;
-        let mut changed = false;
-        if step_button(ui, "−") {
-            val = (val - 1).max(*range.start());
-            changed = val != v;
-            live = true;
-        }
-        let resp = ui.add(egui::DragValue::new(&mut val).speed(0.1).range(range.clone()));
-        if resp.changed() {
-            changed = true;
-            live = resp.dragged();
-        }
-        if step_button(ui, "+") {
-            val = (val + 1).min(*range.end());
-            changed = val != v;
-            live = true;
-        }
-        if changed {
-            edits.push(Edit::new(ulabel, val, live, set));
-        }
-    });
+    if let Some((val, live)) = spin(ui, label, v, 0.1, 1.0, 0, Some(range)) {
+        edits.push(Edit::new(ulabel, val, live, set));
+    }
 }
 
 /// A single-line text field; typing coalesces into one undo step.
@@ -137,10 +145,8 @@ pub fn text(
     set: impl FnOnce(&mut Project, String) + 'static,
 ) {
     let mut val = v.to_owned();
-    ui.horizontal(|ui| {
-        label_cell(ui, label);
-        let w = control_width(ui, 8.0);
-        let resp = ui.add(egui::TextEdit::singleline(&mut val).desired_width(w));
+    row(ui, label, |ui| {
+        let resp = ui.add(egui::TextEdit::singleline(&mut val).desired_width(f32::INFINITY));
         if resp.changed() {
             edits.push(Edit::new(ulabel, val, resp.has_focus(), set));
         }
@@ -157,8 +163,7 @@ pub fn toggle(
     set: impl FnOnce(&mut Project, bool) + 'static,
 ) {
     let mut val = v;
-    ui.horizontal(|ui| {
-        label_cell(ui, label);
+    row(ui, label, |ui| {
         if ui.checkbox(&mut val, "").changed() {
             edits.push(Edit::new(ulabel, val, false, set));
         }
@@ -175,8 +180,7 @@ pub fn combo<T: Copy + PartialEq + 'static>(
     ulabel: &'static str,
     set: impl FnOnce(&mut Project, T) + 'static,
 ) {
-    ui.horizontal(|ui| {
-        label_cell(ui, label);
+    row(ui, label, |ui| {
         let current = options
             .iter()
             .find(|(val, _)| *val == v)
@@ -184,7 +188,7 @@ pub fn combo<T: Copy + PartialEq + 'static>(
             .unwrap_or("?");
         let mut picked = None;
         egui::ComboBox::from_id_salt((ui.id(), label))
-            .width(control_width(ui, 8.0))
+            .width(control_width(ui))
             .selected_text(current)
             .show_ui(ui, |ui| {
                 for &(val, name) in options {
@@ -210,18 +214,7 @@ pub fn color(
     ulabel: &'static str,
     set: impl FnOnce(&mut Project, i32) + 'static,
 ) {
-    // 16 built-ins plus any override indices beyond them.
-    let mut indices: Vec<i32> = (0..16).collect();
-    for &(i, _) in &project.color_overrides {
-        if !(0..16).contains(&i) {
-            indices.push(i);
-        }
-    }
-    indices.sort_unstable();
-    indices.dedup();
-
-    ui.horizontal(|ui| {
-        label_cell(ui, label);
+    row(ui, label, |ui| {
         let rgba = resolve(project, v);
         // The button is the current color itself, with a contrast arrow.
         let arrow = if luminance(rgba) > 0.5 {
@@ -237,6 +230,16 @@ pub fn color(
         );
         let mut picked = None;
         egui::Popup::menu(&resp).show(|ui| {
+            // 16 built-ins plus any override indices beyond them (built
+            // only while the popup is open).
+            let mut indices: Vec<i32> = (0..16).collect();
+            for &(i, _) in &project.color_overrides {
+                if !(0..16).contains(&i) {
+                    indices.push(i);
+                }
+            }
+            indices.sort_unstable();
+            indices.dedup();
             egui::Grid::new("color_grid").spacing([4.0, 4.0]).show(ui, |ui| {
                 for (n, &i) in indices.iter().enumerate() {
                     let c = resolve(project, i);
@@ -300,8 +303,7 @@ pub fn pattern(
     ulabel: &'static str,
     set: impl FnOnce(&mut Project, i32) + 'static,
 ) {
-    ui.horizontal(|ui| {
-        label_cell(ui, label);
+    row(ui, label, |ui| {
         let resp = pattern_sample(ui, v, egui::vec2(48.0, 18.0), false)
             .on_hover_text(pattern_name(v));
         let mut picked = None;
@@ -392,11 +394,10 @@ pub fn font(
             .clamp(0, 13) as usize;
         format!("{slot} — {}", oxygrace::font::FACE_NAMES[face])
     };
-    ui.horizontal(|ui| {
-        label_cell(ui, label);
+    row(ui, label, |ui| {
         let mut picked = None;
         egui::ComboBox::from_id_salt((ui.id(), label))
-            .width(control_width(ui, 8.0))
+            .width(control_width(ui))
             .selected_text(name(v))
             .show_ui(ui, |ui| {
                 for slot in 0..14 {
@@ -420,12 +421,11 @@ pub fn linestyle(
     ulabel: &'static str,
     set: impl FnOnce(&mut Project, i32) + 'static,
 ) {
-    ui.horizontal(|ui| {
-        label_cell(ui, label);
+    row(ui, label, |ui| {
         let mut picked = None;
         let current = LINESTYLE_NAMES.get(v.max(0) as usize).copied().unwrap_or("?");
         egui::ComboBox::from_id_salt((ui.id(), label))
-            .width(control_width(ui, 8.0))
+            .width(control_width(ui))
             .selected_text(current)
             .show_ui(ui, |ui| {
                 for (i, name) in LINESTYLE_NAMES.iter().enumerate() {
