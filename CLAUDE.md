@@ -364,6 +364,15 @@ log axes pan uniformly), Autoscale-to-set fits a graph to a clicked set.
 Autoscale helpers set the world to data extents (all non-hidden sets, or
 one); all are undoable edits.
 
+**Wayland IME workaround** (`defuse_broken_ime` at the top of `App::ui`,
+Linux-gated): recent Wayland compositors make winit stream `Ime(Disabled)` +
+deliver typed chars as `Ime(Commit(..))` with no `Enabled`/`Preedit`, which
+egui 0.34.3 mishandles so text fields accept only the **first** character
+(paste/backspace still work). We rewrite `Ime(Commit)`→`Text` and drop stray
+`Ime` events. No-op on X11; macOS/Windows/wasm untouched. See
+`mod ime_workaround_tests` in `oxygrace-gui/src/app.rs`. (Same fix shipped in
+molar_vis.)
+
 GUI milestones complete (G1–G5); roadmap history in
 `/home/semen/.claude/plans/polished-coalescing-biscuit.md`; toolkit
 analysis in `docs/gui-analysis.md`.
