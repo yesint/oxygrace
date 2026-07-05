@@ -2,7 +2,7 @@
 //! page texture, the screen ↔ device-pixel coordinate mapping, selection,
 //! and direct manipulation (drag-move objects, drag-resize the viewport).
 
-use oxygrace::render::WorldTransform;
+use oxygrace::render::{PageTransform, WorldTransform};
 use oxygrace::{ElementId, Project};
 
 use crate::app::App;
@@ -248,10 +248,7 @@ fn handle_pan(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap) 
     if let Some(pan) = app.pan {
         if resp.dragged() {
             if let Some(pos) = resp.interact_pointer_pos() {
-                let (dx, dy) = vm.to_device(pos);
-                let side = app.page_size.0.min(app.page_size.1) as f64;
-                let dvx = (dx - pan.start.0) as f64 / side;
-                let dvy = -((dy - pan.start.1) as f64) / side;
+                let (dvx, dvy) = view_delta(app, pan.start, vm.to_device(pos));
                 let (x0, x1, y0, y1) = pan.orig.pan_world(dvx, dvy);
                 let g = pan.graph;
                 app.apply_edit(Edit::new("pan", (x0, x1, y0, y1), true, move |p, (a, b, c, d)| {
@@ -302,22 +299,31 @@ fn handle_pick_set(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: View
     }
 }
 
+/// The page's view↔device mapping for the last render (the core transform
+/// the renderer itself used — plot_view never re-derives this math).
+fn page_transform(app: &App) -> PageTransform {
+    PageTransform::new(app.page_size.0, app.page_size.1)
+}
+
+/// View-space displacement between two device points (drag/pan deltas).
+fn view_delta(app: &App, from: (f32, f32), to: (f32, f32)) -> (f64, f64) {
+    let pt = page_transform(app);
+    let (x0, y0) = pt.device_to_view(from.0, from.1);
+    let (x1, y1) = pt.device_to_view(to.0, to.1);
+    (x1 - x0, y1 - y0)
+}
+
 /// The graph whose viewport contains device point `(dx, dy)` — topmost
 /// (last-drawn) visible graph wins.
 fn graph_at(app: &App, dx: f32, dy: f32) -> Option<usize> {
     let project = app.project.as_ref()?;
-    let (pw, ph) = app.page_size;
-    let side = pw.min(ph) as f64;
+    let (vx, vy) = page_transform(app).device_to_view(dx, dy);
     for (i, g) in project.graphs.iter().enumerate().rev() {
         if g.hidden {
             continue;
         }
         let v = g.view;
-        let x0 = (v.xmin * side) as f32;
-        let x1 = (v.xmax * side) as f32;
-        let y0 = (ph as f64 - v.ymax * side) as f32;
-        let y1 = (ph as f64 - v.ymin * side) as f32;
-        if dx >= x0 && dx <= x1 && dy >= y0 && dy <= y1 {
+        if vx >= v.xmin && vx <= v.xmax && vy >= v.ymin && vy <= v.ymax {
             return Some(i);
         }
     }
@@ -363,8 +369,8 @@ fn to_view_coords(project: &Project, world_graph: Option<usize>, x: f64, y: f64)
 
 /// View coordinates → screen position (through device pixels).
 fn view_to_screen(app: &App, vm: ViewMap, vx: f64, vy: f64) -> egui::Pos2 {
-    let side = app.page_size.0.min(app.page_size.1) as f64;
-    vm.to_screen((vx * side) as f32, (app.page_size.1 as f64 - vy * side) as f32)
+    let (dx, dy) = page_transform(app).view_to_device(vx, vy);
+    vm.to_screen(dx, dy)
 }
 
 /// Screen positions of a line annotation's two endpoints.
@@ -564,10 +570,7 @@ fn handle_drag(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap,
         if resp.dragged() {
             if let Some(pos) = resp.interact_pointer_pos() {
                 let dev = vm.to_device(pos);
-                // Device delta → view delta (view Y is up, device Y down).
-                let side = app.page_size.0.min(app.page_size.1) as f64;
-                let dvx = (dev.0 - drag.start.0) as f64 / side;
-                let dvy = -((dev.1 - drag.start.1) as f64) / side;
+                let (dvx, dvy) = view_delta(app, drag.start, dev);
                 apply_drag(app, drag, dvx, dvy, dev);
             }
         }
