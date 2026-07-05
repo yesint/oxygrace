@@ -182,7 +182,7 @@ pub enum FillType {
 
 /// Numeric tick-label format (Grace `FORMAT_*`; the date/geographic formats
 /// are not yet supported and parse as `None` -> Decimal).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TickFormat {
     #[default]
     Decimal,

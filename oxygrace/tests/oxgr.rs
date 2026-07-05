@@ -21,14 +21,14 @@ fn sample_document_parses() {
         world: (xmin: 0.0, xmax: 10.0, ymin: -1.0, ymax: 1.0),
         view: (xmin: 0.15, xmax: 1.15, ymin: 0.15, ymax: 0.85),
         title: (text: "Sample", size: 1.5, font: 0, color: 1),
+        // Partially-written sub-structs: omitted fields fall back to the
+        // baselines (struct-level serde defaults).
         axes: (
             y: (
                 active: true,
-                label: "amplitude",
-                major: 0.5,
-                minor_ticks: 1,
-                ticks_on: Opposite,
-                labels_on: Opposite,
+                label: (text: "amplitude"),
+                ticks: (major: 0.5, side: Opposite),
+                tick_labels: (side: Opposite),
             ),
         ),
         sets: [(
@@ -177,4 +177,30 @@ fn heredoc_delimiter_collision_round_trips() {
 fn future_version_is_refused() {
     let err = load_oxgr_str("(format: 2)").unwrap_err();
     assert!(err.to_string().contains("format 2"), "{err}");
+}
+
+/// The accountant: every corpus `.agr` must render byte-identically after
+/// an `.agr → .oxgr → render` round trip. Any model field the renderer
+/// consumes that the schema misses shows up here.
+#[test]
+fn corpus_renders_identically_through_oxgr() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
+    let mut n = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "agr") {
+            continue;
+        }
+        let project = oxygrace::load(&path).unwrap();
+        let text = save_oxgr_str(&project);
+        let back = load_oxgr_str(&text)
+            .unwrap_or_else(|e| panic!("{path:?}: .oxgr reload failed: {e}"));
+        assert_eq!(
+            oxygrace::render_png(&project),
+            oxygrace::render_png(&back),
+            "render differs through .oxgr for {path:?}"
+        );
+        n += 1;
+    }
+    assert!(n > 0, "no corpus files found");
 }

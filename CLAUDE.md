@@ -272,26 +272,34 @@ device-space geometry, so the SVG matches the PNG pixel-for-pixel
 (validated by rasterizing with Chromium and diffing). Text is emitted
 as glyph outline paths.
 
-**Native `.oxgr` format (v1 slice, in progress):** a single RON document —
-serde-derived schema structs in `oxygrace/src/format/v1.rs`, *deliberately
-decoupled from the model* (mirror structs + From/Into) so internal
-refactors don't break files. Datasets stay inline as `.agr`-style
+**Native `.oxgr` format (v1, full renderer coverage):** a single RON
+document — serde-derived schema structs in `oxygrace/src/format/v1.rs`,
+*deliberately decoupled from the model* (mirror structs + From/Into) so
+internal refactors don't break files; adding a feature = adding a
+`#[serde(default)]` field. Datasets stay inline as `.agr`-style
 whitespace rows inside RON raw/multiline strings (`escape_strings(false)`
 emits them readably; delimiters auto-escalate on collision, verified).
-Writing omits baseline-default values; reading fills omissions from the
-same baselines (lossless omit-default). Unknown fields are skipped →
-forward compatible; `format: 1` gates revisions; `implicit_some` is
-enabled so optional sections read/write without `Some(...)`; `None` enum
-variants are spelled `Off` in files (avoids RON's `r#None`).
+Writing omits baseline-default values (files run ~30% shorter than
+`.agr`); reading fills omissions from the same baselines — struct-level
+`#[serde(default)]` also lets hand-authors write partial sub-structs
+(`ticks: (major: 0.5, side: Opposite)`). Unknown fields are skipped →
+forward compatible; `format: 1` gates revisions; `implicit_some` avoids
+`Some(...)`; `None` enum variants are spelled `Off` (avoids RON's
+`r#None`); named enums for dashes/placements/tick directions/arrows/
+anchors. Covers the whole model: page/dpi, defaults, font map, color
+overrides (stock palette dropped), graphs (kind/world/view/scales/
+invert/stacked/bargap/znorm/titles/frame/legend), full axes (bar, label,
+ticks incl. spec ticks + styles, tick labels incl. formula/start/stop),
+sets (line/symbol incl. char, fill, error bars, avalues, all opacity
+channels, comment) + data, annotation objects and the timestamp.
+Guarded by `oxygrace/tests/oxgr.rs`: the **corpus accountant** requires
+every `examples/*.agr` to render byte-identically through an
+`.agr → .oxgr → render` round trip, plus sample-parse, unknown-field
+tolerance, heredoc collision and version-gate tests.
 `oxygrace::load`/`save` dispatch on the `.oxgr` extension (strict errors
 with positions, unlike the tolerant `.agr` reader); GUI dialogs and
-`args.rs` accept it; web open dispatches too. Covered so far: page,
-color overrides, graph kind/world/view/scales/titles, axes (label + tick
-basics + sides), sets (line/symbol/fill styling incl. opacities) + data.
-Not yet: legend, frame, objects, errbars, avalues, fonts, defaults —
-`.agr` remains the full-fidelity interchange format. Tests in
-`oxygrace/tests/oxgr.rs` (sample parse, render-equality round trip,
-unknown-field tolerance, heredoc collision, version gate).
+`args.rs` accept it; web open dispatches; the CLI converts formats when
+`-o` has a project extension (`oxygrace in.agr -o out.oxgr`).
 
 **Alpha channels (QtGrace extension):** per-set pen opacities ride in
 `#QTGRACE_ADDITIONAL_PARAMETER: G n S m ALPHA_CHANNELS

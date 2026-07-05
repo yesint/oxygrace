@@ -41,10 +41,15 @@ fn main() -> Result<()> {
     }
 
     let output = cli.output.unwrap_or_else(|| cli.input.with_extension("png"));
-    let svg = output
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("svg"));
-    let bytes = if svg {
+    let ext_is = |e: &str| output.extension().is_some_and(|x| x.eq_ignore_ascii_case(e));
+    // A project extension converts between formats instead of rendering.
+    if ext_is("agr") || ext_is("oxgr") {
+        oxygrace::save(&project, &output)
+            .with_context(|| format!("writing {}", output.display()))?;
+        eprintln!("wrote {}", output.display());
+        return Ok(());
+    }
+    let bytes = if ext_is("svg") {
         oxygrace::render_svg(&project).into_bytes()
     } else {
         oxygrace::render_png(&project)
