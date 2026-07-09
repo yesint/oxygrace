@@ -432,6 +432,26 @@ fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
     items
 }
 
+/// Flatten Grace markup to the plain Unicode text it displays as: escapes
+/// are interpreted and dropped, `\n` becomes a space, and Symbol-font runs
+/// are transliterated to Greek. Not a renderer — the canvas draws markup
+/// via [`layout`]; this is for surfaces (GUI tree, status bar) that can
+/// only show an ordinary string.
+pub fn plain(input: &str, base_font: i32, map: &FontMap) -> String {
+    let mut out = String::new();
+    for item in parse_items(input, base_font, map) {
+        match item {
+            Item::Run(r) if r.font == crate::font::FACE_SYMBOL => {
+                out.extend(r.text.chars().map(crate::font::symbol_to_unicode));
+            }
+            Item::Run(r) => out.push_str(&r.text),
+            Item::Newline => out.push(' '),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Parse Grace markup into styled runs (motion controls dropped) — kept for
 /// callers that only need the styling, e.g. tests.
 pub fn parse(input: &str, base_font: i32, map: &FontMap) -> Vec<StyledRun> {
@@ -610,4 +630,21 @@ pub fn bbox(fonts: &FontSet, input: &str, base_font: i32, map: &FontMap) -> Opti
         }
     }
     found.then_some((x0, y0, x1, y1))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::font::FONT_MAP_DEFAULT;
+
+    /// `plain` drops escapes, keeps literal text, transliterates Symbol
+    /// runs to Greek and turns `\n` into a space.
+    #[test]
+    fn plain_flattens_markup() {
+        let p = |s: &str| super::plain(s, 0, &FONT_MAP_DEFAULT);
+        assert_eq!(p(r"CO\s2\N (ppm)"), "CO2 (ppm)");
+        assert_eq!(p(r"original: \xa\0=30°"), "original: α=30°");
+        assert_eq!(p(r"\f{Courier-Bold}BarDY\f{} type"), "BarDY type");
+        assert_eq!(p("line one\\nline two"), "line one line two");
+        assert_eq!(p(r"\xDW\f{}"), "ΔΩ");
+    }
 }

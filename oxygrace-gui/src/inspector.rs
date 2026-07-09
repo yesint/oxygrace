@@ -1,8 +1,8 @@
-//! The property inspector (right panel): dispatches the current selection
-//! to a per-element page. All pages are built from the shared row
-//! vocabulary in [`rows`], so they look and behave identically; every page
-//! follows the same section rhythm (visibility → geometry → line/pen →
-//! fill → text).
+//! The property inspector: shows exactly the selected element's properties
+//! (pages are element-exact — selecting a title shows only title rows),
+//! headed by a clickable breadcrumb tracing the element's ancestry. All
+//! pages are built from the shared row vocabulary in [`rows`], so they look
+//! and behave identically.
 
 pub mod axis;
 pub mod graph;
@@ -22,59 +22,108 @@ pub const SIDE_OPTS: [(i32, &str); 3] = [(0, "Normal"), (1, "Opposite"), (2, "Bo
 /// View/world coordinate anchoring options (objects, legend).
 pub const LOCTYPE_OPTS: [(bool, &str); 2] = [(true, "View"), (false, "World")];
 
-/// `focus_changed` is true on the frame the selection changed: pages then
-/// force-expand the section matching the clicked sub-element and fold the
-/// rest (afterwards the user can open/close sections freely).
 pub fn show(
     ui: &mut egui::Ui,
     project: &Project,
-    selection: Option<ElementId>,
-    focus_changed: bool,
+    selection: &mut Option<ElementId>,
     edits: &mut Vec<Edit>,
 ) {
-    let Some(id) = selection else {
-        page::show(ui, project, edits);
-        return;
-    };
-    // Sub-elements (title, tick labels, …) share their parent's property
-    // page — the header names the page, not the clicked fragment.
-    let header = match id {
-        ElementId::Title(g) | ElementId::Subtitle(g) | ElementId::Frame(g) => ElementId::Graph(g),
-        ElementId::TickLabels { graph, axis } | ElementId::AxisLabel { graph, axis } => {
-            ElementId::AxisBar { graph, axis }
-        }
-        other => other,
-    };
-    ui.label(crate::tree::describe(Some(project), header));
+    breadcrumb(ui, project, selection);
     ui.separator();
-    egui::ScrollArea::vertical().show(ui, |ui| match id {
-        ElementId::Graph(g) => {
-            graph::show(ui, project, g, graph::Focus::Area, focus_changed, edits)
+    // Dispatch on the (possibly breadcrumb-updated) selection, so a
+    // breadcrumb click switches the page in the same frame.
+    egui::ScrollArea::vertical().show(ui, |ui| match *selection {
+        None => page::show(ui, project, edits),
+        Some(ElementId::Graph(g)) => graph::area(ui, project, g, edits),
+        Some(ElementId::Frame(g)) => graph::frame(ui, project, g, edits),
+        Some(ElementId::Title(g)) => graph::title(ui, project, g, edits),
+        Some(ElementId::Subtitle(g)) => graph::subtitle(ui, project, g, edits),
+        Some(ElementId::AxisBar { graph, axis }) => axis::bar(ui, project, graph, axis, edits),
+        Some(ElementId::TickLabels { graph, axis }) => {
+            axis::tick_labels(ui, project, graph, axis, edits)
         }
-        ElementId::Title(g) => {
-            graph::show(ui, project, g, graph::Focus::Title, focus_changed, edits)
+        Some(ElementId::AxisLabel { graph, axis }) => axis::label(ui, project, graph, axis, edits),
+        Some(ElementId::Set { graph, set }) => set::show(ui, project, graph, set, edits),
+        Some(ElementId::Legend(g)) => legend::show(ui, project, g, edits),
+        Some(ElementId::StringObj(i)) => object::string(ui, project, i, edits),
+        Some(ElementId::LineObj(i)) => object::line(ui, project, i, edits),
+        Some(ElementId::BoxObj(i)) => object::boxlike(ui, project, i, false, edits),
+        Some(ElementId::EllipseObj(i)) => object::boxlike(ui, project, i, true, edits),
+        Some(ElementId::Timestamp) => object::timestamp(ui, project, edits),
+    });
+}
+
+/// The element's parent in the model hierarchy (breadcrumb ancestry).
+/// Top-level elements (graphs, annotations, the timestamp) belong to the
+/// page itself.
+fn parent(id: ElementId) -> Option<ElementId> {
+    use ElementId::*;
+    match id {
+        Graph(_) | StringObj(_) | LineObj(_) | BoxObj(_) | EllipseObj(_) | Timestamp => None,
+        Frame(g) | Title(g) | Subtitle(g) | Legend(g) => Some(Graph(g)),
+        AxisBar { graph, .. } | Set { graph, .. } => Some(Graph(graph)),
+        TickLabels { graph, axis } | AxisLabel { graph, axis } => Some(AxisBar { graph, axis }),
+    }
+}
+
+/// Short breadcrumb segment name — the ancestry spells the context, so
+/// segments don't repeat it (compare `tree::describe`).
+fn segment_name(project: &Project, id: ElementId) -> String {
+    use ElementId::*;
+    match id {
+        Graph(g) => format!("Graph {g}"),
+        Frame(_) => "Frame".into(),
+        Title(_) => "Title".into(),
+        Subtitle(_) => "Subtitle".into(),
+        Legend(_) => "Legend".into(),
+        AxisBar { axis, .. } => crate::tree::AXIS_NAMES[axis.min(3)].into(),
+        TickLabels { .. } => "Tick labels".into(),
+        AxisLabel { .. } => "Label".into(),
+        Set { graph, set } => {
+            let legend = project.graphs.get(graph).and_then(|gr| {
+                let s = gr.sets.get(set)?;
+                (!s.legend.is_empty())
+                    .then(|| crate::tree::plain(project, gr.legend.font, &s.legend))
+            });
+            match legend {
+                None => format!("S{set}"),
+                Some(l) => format!("S{set} — {}", crate::tree::truncate(&l, 20)),
+            }
         }
-        ElementId::Subtitle(g) => {
-            graph::show(ui, project, g, graph::Focus::Subtitle, focus_changed, edits)
+        StringObj(i) => format!("String {i}"),
+        LineObj(i) => format!("Line {i}"),
+        BoxObj(i) => format!("Box {i}"),
+        EllipseObj(i) => format!("Ellipse {i}"),
+        Timestamp => "Timestamp".into(),
+    }
+}
+
+/// `Page › Graph 0 › X axis › Tick labels`: ancestor segments are links
+/// that select that element ("Page" clears the selection); the last segment
+/// is the selected element itself.
+fn breadcrumb(ui: &mut egui::Ui, project: &Project, selection: &mut Option<ElementId>) {
+    let mut chain = Vec::new();
+    let mut cur = *selection;
+    while let Some(id) = cur {
+        chain.push(id);
+        cur = parent(id);
+    }
+    chain.reverse();
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if chain.is_empty() {
+            ui.strong("Page");
+        } else if ui.link("Page").clicked() {
+            *selection = None;
         }
-        ElementId::Frame(g) => {
-            graph::show(ui, project, g, graph::Focus::Frame, focus_changed, edits)
+        for (i, id) in chain.iter().enumerate() {
+            ui.weak("›");
+            let name = segment_name(project, *id);
+            if i + 1 == chain.len() {
+                ui.strong(name);
+            } else if ui.link(name).clicked() {
+                *selection = Some(*id);
+            }
         }
-        ElementId::AxisBar { graph, axis } => {
-            axis::show(ui, project, graph, axis, axis::Focus::Bar, focus_changed, edits)
-        }
-        ElementId::TickLabels { graph, axis } => {
-            axis::show(ui, project, graph, axis, axis::Focus::TickLabels, focus_changed, edits)
-        }
-        ElementId::AxisLabel { graph, axis } => {
-            axis::show(ui, project, graph, axis, axis::Focus::Label, focus_changed, edits)
-        }
-        ElementId::Set { graph, set } => set::show(ui, project, graph, set, edits),
-        ElementId::Legend(g) => legend::show(ui, project, g, edits),
-        ElementId::StringObj(i) => object::string(ui, project, i, edits),
-        ElementId::LineObj(i) => object::line(ui, project, i, edits),
-        ElementId::BoxObj(i) => object::boxlike(ui, project, i, false, edits),
-        ElementId::EllipseObj(i) => object::boxlike(ui, project, i, true, edits),
-        ElementId::Timestamp => object::timestamp(ui, project, edits),
     });
 }

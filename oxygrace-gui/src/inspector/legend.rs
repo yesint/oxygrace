@@ -10,7 +10,7 @@ pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, edits: &mut Vec<Edit
         return;
     };
 
-    rows::section(ui, "Legend", true, None, "legend_main", |ui| {
+    rows::section(ui, "Legend", true, "legend_main", |ui| {
         rows::toggle(ui, edits, "Show", l.active, "legend: on", move |p, v| {
             p.graphs[g].legend.active = v;
         });
@@ -46,7 +46,7 @@ pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, edits: &mut Vec<Edit
         });
     });
 
-    rows::section(ui, "Box", true, None, "legend_box", |ui| {
+    rows::section(ui, "Box", true, "legend_box", |ui| {
         rows::toggle(ui, edits, "Draw box", l.box_on, "legend box: on", move |p, v| {
             p.graphs[g].legend.box_on = v;
         });

@@ -18,6 +18,19 @@ pub enum Tool {
     PickSet,
 }
 
+/// User preferences (Edit → Settings…), persisted across sessions via
+/// eframe storage.
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    /// Stack the properties inspector below the project tree in the left
+    /// panel instead of using a separate right-side panel.
+    pub inspector_below: bool,
+}
+
+/// eframe storage key for [`Settings`].
+const SETTINGS_KEY: &str = "settings";
+
 pub struct App {
     /// Embedded fonts, loaded once for the app's lifetime.
     pub fonts: FontSet,
@@ -31,9 +44,9 @@ pub struct App {
     /// Element geometry of the last render (hit-testing).
     pub render_info: Option<RenderInfo>,
     pub selection: Option<ElementId>,
-    /// Set by any selecting click (tree or canvas): the inspector then
-    /// re-focuses its sections onto the clicked (sub-)element.
-    pub refocus: bool,
+    /// Selection as of the last frame: when it differs, the tree expands
+    /// collapsed ancestors so the newly selected row is visible.
+    prev_selection: Option<ElementId>,
     /// Device position of the last canvas click — clicking the same spot
     /// again cycles through overlapping elements.
     pub last_click: Option<(f32, f32)>,
@@ -51,6 +64,10 @@ pub struct App {
     pub theme_pref: crate::theme::Pref,
     /// Currently applied concrete mode (resolved from the preference).
     pub theme: crate::theme::Mode,
+    /// Persisted user preferences (Edit → Settings…).
+    pub settings: Settings,
+    /// The Settings window is showing.
+    show_settings: bool,
     /// Free page aspect: the page follows the canvas size (xmgrace -free).
     pub free_aspect: bool,
     /// Page size to restore when free aspect is switched off.
@@ -86,6 +103,7 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        crate::icons::install(&cc.egui_ctx);
         crate::theme::apply(&cc.egui_ctx, crate::theme::Mode::Dark);
         #[cfg(target_arch = "wasm32")]
         let (file_tx, file_rx) = std::sync::mpsc::channel();
@@ -98,7 +116,7 @@ impl App {
             page_size: (0, 0),
             render_info: None,
             selection: None,
-            refocus: false,
+            prev_selection: None,
             last_click: None,
             hover: None,
             drag: None,
@@ -107,6 +125,11 @@ impl App {
             rotate_armed: None,
             theme_pref: crate::theme::Pref::System,
             theme: crate::theme::Mode::Dark,
+            settings: cc
+                .storage
+                .and_then(|s| eframe::get_value(s, SETTINGS_KEY))
+                .unwrap_or_default(),
+            show_settings: false,
             free_aspect: false,
             saved_page: None,
             canvas_size: (0, 0),
@@ -156,13 +179,16 @@ impl App {
         // Debug/CI hook: pre-select an element (e.g. "set:0:1", "legend:0").
         if let Ok(spec) = std::env::var("OXYGRACE_GUI_SELECT") {
             app.selection = parse_element_spec(&spec);
-            app.refocus = true;
         }
         // Debug/CI hook: force a mode.
         match std::env::var("OXYGRACE_GUI_THEME").as_deref() {
             Ok("light") => app.theme_pref = crate::theme::Pref::Light,
             Ok("dark") => app.theme_pref = crate::theme::Pref::Dark,
             _ => {}
+        }
+        // Debug/CI hook: force a panel layout ("stacked" = below the tree).
+        if let Ok(v) = std::env::var("OXYGRACE_GUI_LAYOUT") {
+            app.settings.inspector_below = v == "stacked";
         }
         app
     }
@@ -331,6 +357,10 @@ impl App {
                     {
                         self.redo_action();
                     }
+                    ui.separator();
+                    if ui.button("Settings…").clicked() {
+                        self.show_settings = true;
+                    }
                 });
                 let (view_resp, _) = egui::containers::menu::MenuButton::new("View").ui(ui, |ui| {
                     if ui
@@ -349,6 +379,65 @@ impl App {
                 menu_hover_follow(ui.ctx(), &[file_resp, edit_resp, view_resp]);
             });
         });
+    }
+
+    /// The project-tree panel body (heading + tree). `reveal` expands
+    /// collapsed ancestors of a freshly changed selection.
+    fn tree_panel(&mut self, ui: &mut egui::Ui, reveal: bool) {
+        ui.heading("Project");
+        ui.separator();
+        match &self.project {
+            Some(project) => {
+                if crate::tree::show(ui, project, &mut self.selection, reveal) {
+                    self.rotate_armed = None;
+                }
+            }
+            None => {
+                ui.weak("No file open");
+            }
+        }
+    }
+
+    /// The properties-inspector panel body (heading + breadcrumbed page),
+    /// applying whatever edits the page queued.
+    fn inspector_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Properties");
+        ui.separator();
+        let mut edits: Vec<Edit> = Vec::new();
+        match &self.project {
+            Some(project) => {
+                crate::inspector::show(ui, project, &mut self.selection, &mut edits);
+            }
+            None => {
+                ui.weak("No file open");
+            }
+        }
+        for e in edits {
+            self.apply_edit(e);
+        }
+    }
+
+    /// The Settings window (Edit → Settings…); choices persist across
+    /// sessions via eframe storage (see [`App::save`]).
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        if !self.show_settings {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Settings")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("Properties panel").weak());
+                ui.radio_value(&mut self.settings.inspector_below, false, "Right of the plot");
+                ui.radio_value(&mut self.settings.inspector_below, true, "Below the project tree");
+            });
+        if !open {
+            self.show_settings = false;
+        }
     }
 
     /// Toggle a modal canvas tool from the toolbar (clicking the active
@@ -604,6 +693,11 @@ fn defuse_broken_ime(ctx: &egui::Context) {
 }
 
 impl eframe::App for App {
+    /// Persist [`Settings`] (called by eframe on shutdown and periodically).
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, SETTINGS_KEY, &self.settings);
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Apply the theme when the preference or the OS mode changes
         // (App::new already applied the initial Dark).
@@ -675,48 +769,49 @@ impl eframe::App for App {
         #[cfg(target_os = "linux")]
         defuse_broken_ime(ui.ctx());
         self.menu_bar(ui);
-        // Note: egui persists panel widths by id — bump the id suffix when
-        // changing the size policy, or stale stored widths win.
-        egui::Panel::left("tree_v2")
-            .resizable(true)
-            .default_size(220.0)
-            .size_range(140.0..=380.0)
-            .show_inside(ui, |ui| {
-                self.toolbar(ui);
-                ui.separator();
-                ui.heading("Project");
-                ui.separator();
-                match &self.project {
-                    Some(project) => {
-                        if crate::tree::show(ui, project, &mut self.selection) {
-                            self.refocus = true;
-                            self.rotate_armed = None;
-                        }
-                    }
-                    None => {
-                        ui.weak("No file open");
-                    }
-                }
-            });
-        let focus_changed = std::mem::take(&mut self.refocus);
-        let mut edits: Vec<Edit> = Vec::new();
-        egui::Panel::right("inspector_v2")
-            .resizable(true)
-            .default_size(310.0)
-            .size_range(200.0..=400.0)
-            .show_inside(ui, |ui| {
-                ui.heading("Properties");
-                ui.separator();
-                if let Some(project) = &self.project {
-                    crate::inspector::show(ui, project, self.selection, focus_changed, &mut edits);
-                } else {
-                    ui.weak("No file open");
-                }
-            });
-        for e in edits {
-            self.apply_edit(e);
+        // Selection changed since the last frame (canvas click, breadcrumb):
+        // the tree reveals the newly selected row this frame.
+        let reveal = self.selection != self.prev_selection;
+        self.prev_selection = self.selection;
+        // Note: egui persists panel sizes by id — the two layouts use
+        // distinct ids so each remembers its own size (bump the suffix when
+        // changing a size policy, or stale stored sizes win).
+        if self.settings.inspector_below {
+            // Stacked layout: one left panel with the tree above the
+            // properties, leaving the full remaining width to the plot.
+            egui::Panel::left("tree_stack_v1")
+                .resizable(true)
+                .default_size(300.0)
+                .size_range(220.0..=520.0)
+                .show_inside(ui, |ui| {
+                    self.toolbar(ui);
+                    ui.separator();
+                    egui::Panel::bottom("inspector_stack_v1")
+                        .resizable(true)
+                        .default_size(320.0)
+                        .size_range(100.0..=800.0)
+                        .show_inside(ui, |ui| self.inspector_panel(ui));
+                    egui::CentralPanel::default()
+                        .show_inside(ui, |ui| self.tree_panel(ui, reveal));
+                });
+        } else {
+            egui::Panel::left("tree_v2")
+                .resizable(true)
+                .default_size(220.0)
+                .size_range(140.0..=380.0)
+                .show_inside(ui, |ui| {
+                    self.toolbar(ui);
+                    ui.separator();
+                    self.tree_panel(ui, reveal);
+                });
+            egui::Panel::right("inspector_v2")
+                .resizable(true)
+                .default_size(310.0)
+                .size_range(200.0..=400.0)
+                .show_inside(ui, |ui| self.inspector_panel(ui));
         }
         self.confirm_close_modal(ui.ctx());
+        self.settings_window(ui.ctx());
         egui::Panel::bottom("status").show_inside(ui, |ui| {
             ui.label(&self.status);
         });

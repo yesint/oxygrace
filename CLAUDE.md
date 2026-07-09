@@ -340,14 +340,23 @@ applies them after the UI pass — widgets never mutate the model);
 label into one step, Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y, Edit menu shows step
 labels); `inspector/rows.rs` property-row vocabulary (num/int/text/toggle/
 combo/color-with-swatches/font/linestyle-with-dash-preview, all in
-2-column grids) and pages: page, graph (world/viewport/scales/titles),
-axis (bar/ticks/tick-labels/label sections, clicked sub-element opens
-expanded), set (line/symbol/fill/errorbar/avalue), legend, frame, objects
-(string/line/box/ellipse/timestamp); Save / Save As (Ctrl+S, rfd) via the
+2-column grids) and pages: page, graph, frame, title/subtitle, axis,
+tick labels, axis label, set (line/symbol/fill/errorbar/avalue), legend,
+objects (string/line/box/ellipse/timestamp) — element-exact since the
+inspector redesign (see below); Save / Save As (Ctrl+S, rfd) via the
 core writer, modified flag in the window title, confirm-on-close modal.
-UX refinements: sub-elements (title, tick labels…) share their parent's
-page with the clicked section force-expanded (App.refocus flag); shape-based
-selection highlight via `RenderInfo::shapes_of` (clip-aware); `hit_candidates`
+UX refinements: shape-based
+selection highlight via `RenderInfo::shapes_of` (clip-aware); highlights
+never sit on the ink itself, so the element's own color and line width
+stay visible while being edited — axes/tick labels/line annotations get
+closed loops a fixed `HIGHLIGHT_GAP` outside each shape
+(`outline_around_polyline`/`_polygon`), and sets get closed contours
+around *all* their ink at once: a coarse screen-space distance field
+stamped from every recorded shape (fills scanline-filled so they don't
+grow inner rings), traced at the `SET_GAP` isoline with marching squares
+(`plot_view.rs` `DistGrid`/`set_outline_loops`/`marching_squares`) —
+clusters get separate loops, ring-shaped data keeps its hole;
+`hit_candidates`
 + same-spot click cycling reaches occluded elements — candidates are *scored*
 (visible-over-occluded, then ink > fill > click-region, then distance to ink,
 then smaller ink area, then draw order), so an exact hit on a curve beats a
@@ -356,7 +365,7 @@ plot-area region never shadows drawn ink; opaque fills occlude ink below
 them (demoted, still cyclable); grid lines muted from recording entirely;
 swatch-grid color &
 pattern pickers; −/+ spin buttons; tree scrolls both ways so panels shrink
-freely; frame merged into the plot-area page.
+freely.
 
 **GUI G4 (done):** direct manipulation. Core grew the inverse transforms
 (`PageTransform::device_to_view`, `WorldTransform::view_to_x/y/world`, incl.
@@ -403,8 +412,10 @@ bundled example. Bundle via trunk (`oxygrace-gui/index.html`,
 Actions"). Verified end-to-end in headless Chromium: UI + plot render in
 the browser, System theme follows `prefers-color-scheme`.
 
-**GUI toolbar (done):** an icon-only toolbar (`icons.rs` — monochrome
-glyphs drawn procedurally with the egui painter, no image assets) above the
+**GUI toolbar (done):** an icon-only toolbar (`icons.rs` — glyphs from
+the embedded Phosphor icon font, `egui-phosphor`; installed into egui's
+fonts at startup, tinted by the current text color so they track the
+theme, crisp at any DPI via the text pipeline) above the
 project tree, wrapping to the panel width: Open, Save, Autoscale-all,
 Autoscale-to-set, Pan, Free aspect. Two modal canvas tools (`App::tool`:
 Select/Pan/PickSet, gated in `plot_view::show`): Pan drags the world window
@@ -412,6 +423,39 @@ of the graph under the cursor (`WorldTransform::pan_world`, scaled-space so
 log axes pan uniformly), Autoscale-to-set fits a graph to a clicked set.
 Autoscale helpers set the world to data extents (all non-hidden sets, or
 one); all are undoable edits.
+
+**GUI inspector redesign (done):** property pages are element-exact —
+selecting a title, frame, tick labels or axis label opens a page holding
+only that element's properties (the old parent-family pages with
+force-expanded sections, the `App.refocus` flag and the page `Focus`
+enums are gone; `graph.rs` split into `area`/`frame`/`title`/`subtitle`,
+`axis.rs` into `bar`/`tick_labels`/`label`). Pages with a single section
+(title, tick labels, string objects, …) render their rows directly — no
+redundant collapsible header, the breadcrumb names them. A clickable
+breadcrumb
+(`Page › Graph 0 › X axis › Tick labels`) heads the inspector — ancestor
+segments select that element, "Page" clears the selection (page
+properties). The tree mirrors the same granularity: a "Page" root row
+(selected whenever nothing else is), each graph is a collapsing node
+whose selectable header is the graph itself ("Graph 0 — title", same
+name as the breadcrumb; there is no separate "Plot area" row),
+Frame/Title/Subtitle rows are always present (dimmed when empty) so
+not-yet-drawn elements stay reachable, and each axis is a collapsing
+node with Tick labels / Label children. On the frame the selection
+changes (canvas click, breadcrumb) the tree force-opens collapsed
+ancestors of the selected element (`tree::show`'s `reveal`, driven by
+`App.prev_selection`), so the highlighted row is never hidden. Labels
+with Grace markup are
+flattened for tree/status display by `oxygrace::text::plain` (escapes
+interpreted and dropped, Symbol runs transliterated to Greek via
+`font::symbol_to_unicode` — the renderer itself gets Greek from the
+font cmap, UI toolkits need codepoints). Edit → Settings… opens a
+Settings window with a layout
+toggle (`Settings.inspector_below`): properties right of the plot
+(default) or stacked below the project tree in one left panel (more
+canvas width). Settings persist via eframe storage (`persistence`
+feature — also persists egui memory: panel sizes, collapse states);
+debug hook `OXYGRACE_GUI_LAYOUT=stacked|right`.
 
 **Wayland IME workaround** (`defuse_broken_ime` at the top of `App::ui`,
 Linux-gated): recent Wayland compositors make winit stream `Ime(Disabled)` +

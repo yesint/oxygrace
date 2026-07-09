@@ -205,7 +205,6 @@ fn select_interactions(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: 
             app.rotate_armed = None;
         }
         app.selection = pick;
-        app.refocus = true;
         app.last_click = Some((dx, dy));
         app.status = match pick {
             Some(id) => {
@@ -560,7 +559,6 @@ fn handle_drag(app: &mut App, ui: &egui::Ui, resp: &egui::Response, vm: ViewMap,
         if let Some(id) = target {
             if let Some(orig) = orig_of(project, id) {
                 app.selection = Some(id);
-                app.refocus = true;
                 app.drag = Some(DragState { id, kind: DragKind::Move, start: dev, orig });
             }
         }
@@ -762,11 +760,17 @@ fn set_two_points(p: &mut Project, id: ElementId, x1: f64, y1: f64, x2: f64, y2:
 }
 
 /// Elements highlighted by tracing their actual recorded geometry (lines,
-/// symbols, label boxes) rather than one big bounding box.
+/// symbols, label boxes) rather than one big bounding box. Sets are
+/// handled separately again: one contour around *all* their ink.
 fn shape_highlighted(id: oxygrace::ElementId) -> bool {
     use oxygrace::ElementId::*;
-    matches!(id, Set { .. } | AxisBar { .. } | TickLabels { .. } | LineObj(_))
+    matches!(id, AxisBar { .. } | TickLabels { .. } | LineObj(_))
 }
+
+/// Gap between an element's ink and its highlight outline: the outline is
+/// drawn *around* the shapes, never on them, so the element's own color
+/// and line width stay visible while they are edited.
+const HIGHLIGHT_GAP: f32 = 3.5;
 
 /// Selection and hover highlights, painted on top of the texture (never
 /// baked into the pixmap, so they cost no re-render).
@@ -823,6 +827,17 @@ fn highlight(
     let halo = HALO.gamma_multiply(0.8 * intensity);
     let accent = ACCENT.gamma_multiply(intensity);
 
+    // Sets: closed contours around *all* the ink at once (distance-field
+    // isoline) — the outline follows the data's shape at a fixed distance
+    // without tracing, and so masking, any individual point or segment.
+    if let oxygrace::ElementId::Set { .. } = id {
+        for lp in set_outline_loops(info, id, vm) {
+            painter.add(egui::Shape::closed_line(lp.clone(), egui::Stroke::new(3.5, halo)));
+            painter.add(egui::Shape::closed_line(lp, egui::Stroke::new(1.5, accent)));
+        }
+        return;
+    }
+
     if shape_highlighted(id) {
         for (clip, shape) in info.shapes_of(id) {
             // Respect the clip the primitive was drawn under, so highlights
@@ -834,6 +849,14 @@ fn highlight(
                 }
                 None => painter.clone(),
             };
+            // A closed outline drawn a fixed gap outside the ink.
+            let outline = |pts: Vec<egui::Pos2>| {
+                painter.add(egui::Shape::closed_line(
+                    pts.clone(),
+                    egui::Stroke::new(3.5, halo),
+                ));
+                painter.add(egui::Shape::closed_line(pts, egui::Stroke::new(1.5, accent)));
+            };
             match shape {
                 oxygrace::OverlayShape::Lines { pts, half_width } => {
                     let line = screen_polyline(pts, vm);
@@ -841,28 +864,17 @@ fn highlight(
                         continue;
                     }
                     let w = (2.0 * half_width * vm.scale).max(1.5);
-                    painter.add(egui::Shape::line(
-                        line.clone(),
-                        egui::Stroke::new(w + 5.0, halo),
-                    ));
-                    painter.add(egui::Shape::line(
-                        line,
-                        egui::Stroke::new(w + 2.0, accent.gamma_multiply(0.75)),
-                    ));
+                    outline(outline_around_polyline(&line, w / 2.0 + HIGHLIGHT_GAP));
                 }
                 oxygrace::OverlayShape::Polygon(pts) => {
                     let line = screen_polyline(pts, vm);
-                    if line.len() < 2 {
+                    if line.len() < 3 {
                         continue;
                     }
-                    painter.add(egui::Shape::closed_line(
-                        line.clone(),
-                        egui::Stroke::new(5.0, halo),
-                    ));
-                    painter.add(egui::Shape::closed_line(line, egui::Stroke::new(2.0, accent)));
+                    outline(outline_around_polygon(&line, HIGHLIGHT_GAP));
                 }
                 oxygrace::OverlayShape::Rect(b) => {
-                    let r = bounds_to_screen(b, vm).expand(1.5);
+                    let r = bounds_to_screen(b, vm).expand(HIGHLIGHT_GAP);
                     painter.rect_stroke(r, 1.0, egui::Stroke::new(3.5, halo), egui::StrokeKind::Outside);
                     painter.rect_stroke(r, 1.0, egui::Stroke::new(1.5, accent), egui::StrokeKind::Outside);
                 }
@@ -892,6 +904,341 @@ fn highlight(
             painter.rect_stroke(hr, 1.0, egui::Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
         }
     }
+}
+
+/// Ink → set-outline distance (px): the isoline level of the contour
+/// drawn around a selected set's ink.
+const SET_GAP: f32 = 6.0;
+/// Resolution of the set-outline distance field (px per cell; grows when
+/// a set spans more than ~500 cells).
+const FIELD_CELL: f32 = 3.0;
+
+/// A coarse screen-space "distance to the ink" field over one set.
+struct DistGrid {
+    x0: f32,
+    y0: f32,
+    cell: f32,
+    w: usize,
+    h: usize,
+    v: Vec<f32>,
+}
+
+impl DistGrid {
+    const FAR: f32 = 1e9;
+
+    fn new(bbox: egui::Rect, cell: f32) -> Self {
+        let w = (bbox.width() / cell).ceil() as usize + 2;
+        let h = (bbox.height() / cell).ceil() as usize + 2;
+        DistGrid { x0: bbox.min.x, y0: bbox.min.y, cell, w, h, v: vec![Self::FAR; w * h] }
+    }
+
+    fn center(&self, i: usize, j: usize) -> egui::Pos2 {
+        egui::pos2(self.x0 + i as f32 * self.cell, self.y0 + j as f32 * self.cell)
+    }
+
+    /// Lower the field to `dist(cell, p) - r` for cells within `reach`.
+    fn stamp(&mut self, p: egui::Pos2, r: f32, reach: f32) {
+        let i0 = (((p.x - reach - self.x0) / self.cell).floor().max(0.0)) as usize;
+        let j0 = (((p.y - reach - self.y0) / self.cell).floor().max(0.0)) as usize;
+        let i1 = ((((p.x + reach - self.x0) / self.cell).ceil()) as usize).min(self.w - 1);
+        let j1 = ((((p.y + reach - self.y0) / self.cell).ceil()) as usize).min(self.h - 1);
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                let d = (self.center(i, j) - p).length() - r;
+                let v = &mut self.v[j * self.w + i];
+                if d < *v {
+                    *v = d;
+                }
+            }
+        }
+    }
+
+    /// Scanline-fill a polygon's interior to distance 0, so filled areas
+    /// (set fills, bars) get only an outer contour, not an inner ring.
+    fn fill_polygon(&mut self, poly: &[egui::Pos2]) {
+        for j in 0..self.h {
+            let y = self.y0 + j as f32 * self.cell;
+            let mut xs: Vec<f32> = Vec::new();
+            for k in 0..poly.len() {
+                let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+                if (a.y > y) != (b.y > y) {
+                    xs.push(a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y));
+                }
+            }
+            xs.sort_by(f32::total_cmp);
+            for pair in xs.chunks_exact(2) {
+                let i0 = (((pair[0] - self.x0) / self.cell).ceil().max(0.0)) as usize;
+                let i1 = ((((pair[1] - self.x0) / self.cell).floor()) as usize).min(self.w - 1);
+                for i in i0..=i1 {
+                    self.v[j * self.w + i] = self.v[j * self.w + i].min(0.0);
+                }
+            }
+        }
+    }
+}
+
+/// Closed contour loops around *all* of a set's ink at [`SET_GAP`]: stamp
+/// a distance field from every recorded shape, then trace its `SET_GAP`
+/// isoline with marching squares. Disconnected clusters give separate
+/// loops and ring-shaped data keeps its hole — and the outline never sits
+/// on the ink itself.
+fn set_outline_loops(
+    info: &oxygrace::RenderInfo,
+    id: oxygrace::ElementId,
+    vm: ViewMap,
+) -> Vec<Vec<egui::Pos2>> {
+    // 1. Collect stamp samples (position + ink half-width) and filled
+    //    polygons in screen space; clipped-away geometry contributes none.
+    let mut samples: Vec<(egui::Pos2, f32)> = Vec::new();
+    let mut fills: Vec<Vec<egui::Pos2>> = Vec::new();
+    for (clip, shape) in info.shapes_of(id) {
+        let clip_r = clip.map(|c| bounds_to_screen(c, vm).expand(2.0));
+        let keep = |p: egui::Pos2| clip_r.is_none_or(|r| r.contains(p));
+        match shape {
+            oxygrace::OverlayShape::Lines { pts, half_width } => {
+                let r = (half_width * vm.scale).max(0.75);
+                sample_path(&screen_polyline(pts, vm), false, |p| {
+                    if keep(p) {
+                        samples.push((p, r));
+                    }
+                });
+            }
+            oxygrace::OverlayShape::Polygon(pts) => {
+                let poly = screen_polyline(pts, vm);
+                if poly.len() >= 3 {
+                    sample_path(&poly, true, |p| {
+                        if keep(p) {
+                            samples.push((p, 0.75));
+                        }
+                    });
+                    fills.push(poly);
+                }
+            }
+            oxygrace::OverlayShape::Rect(b) => {
+                // Sample the box area at cell steps (symbol boxes are a few
+                // cells; avalue label boxes stay hole-free).
+                let r = bounds_to_screen(b, vm);
+                let (nx, ny) = (
+                    (r.width() / FIELD_CELL).ceil().max(1.0) as usize,
+                    (r.height() / FIELD_CELL).ceil().max(1.0) as usize,
+                );
+                for j in 0..=ny {
+                    for i in 0..=nx {
+                        let p = egui::pos2(
+                            r.min.x + r.width() * i as f32 / nx as f32,
+                            r.min.y + r.height() * j as f32 / ny as f32,
+                        );
+                        if keep(p) {
+                            samples.push((p, 0.75));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if samples.is_empty() {
+        return Vec::new();
+    }
+
+    // 2. Field extent and resolution (bounded grid: huge sets coarsen).
+    let mut bbox = egui::Rect::NOTHING;
+    for (p, _) in &samples {
+        bbox.extend_with(*p);
+    }
+    let margin = SET_GAP + 4.0 * FIELD_CELL;
+    let bbox = bbox.expand(margin);
+    let cell = FIELD_CELL.max(bbox.width() / 500.0).max(bbox.height() / 500.0);
+    let mut grid = DistGrid::new(bbox, cell);
+
+    // 3. Stamp (deduplicated per cell — dense clouds cost grid-area, not
+    //    point-count).
+    let mut seen = std::collections::HashSet::new();
+    for &(p, r) in &samples {
+        let key = (
+            ((p.x - grid.x0) / cell) as i32,
+            ((p.y - grid.y0) / cell) as i32,
+            (r * 2.0) as i32,
+        );
+        if seen.insert(key) {
+            grid.stamp(p, r, SET_GAP + r + 3.0 * cell);
+        }
+    }
+    for poly in &fills {
+        grid.fill_polygon(poly);
+    }
+
+    // 4. Trace the isoline.
+    marching_squares(&grid, SET_GAP)
+}
+
+/// Call `f` at steps of [`FIELD_CELL`] along a polyline (`closed` adds the
+/// last→first segment).
+fn sample_path(pts: &[egui::Pos2], closed: bool, mut f: impl FnMut(egui::Pos2)) {
+    let n = pts.len();
+    if n == 0 {
+        return;
+    }
+    let last = if closed { n } else { n - 1 };
+    for k in 0..last {
+        let (a, b) = (pts[k], pts[(k + 1) % n]);
+        let steps = ((b - a).length() / FIELD_CELL).ceil().max(1.0) as usize;
+        for s in 0..steps {
+            f(a + (b - a) * (s as f32 / steps as f32));
+        }
+    }
+    f(pts[n - 1]);
+}
+
+/// Trace the `iso` contour of a distance field as closed loops (marching
+/// squares with linear interpolation, segments chained by shared
+/// endpoints).
+fn marching_squares(grid: &DistGrid, iso: f32) -> Vec<Vec<egui::Pos2>> {
+    let at = |i: usize, j: usize| grid.v[j * grid.w + i];
+    let mut segs: Vec<(egui::Pos2, egui::Pos2)> = Vec::new();
+    for j in 0..grid.h - 1 {
+        for i in 0..grid.w - 1 {
+            // Corner values: 0 = (i,j), 1 = (i+1,j), 2 = (i+1,j+1), 3 = (i,j+1).
+            let v = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
+            let mut case = 0usize;
+            for (k, val) in v.iter().enumerate() {
+                if *val <= iso {
+                    case |= 1 << k;
+                }
+            }
+            if case == 0 || case == 15 {
+                continue;
+            }
+            let corner = [
+                grid.center(i, j),
+                grid.center(i + 1, j),
+                grid.center(i + 1, j + 1),
+                grid.center(i, j + 1),
+            ];
+            // Interpolated crossing on the edge between corners a and b.
+            let cross = |a: usize, b: usize| {
+                let t = ((iso - v[a]) / (v[b] - v[a])).clamp(0.0, 1.0);
+                corner[a] + (corner[b] - corner[a]) * t
+            };
+            let (bottom, right, top, left) =
+                (|| cross(0, 1), || cross(1, 2), || cross(3, 2), || cross(0, 3));
+            match case {
+                1 | 14 => segs.push((bottom(), left())),
+                2 | 13 => segs.push((bottom(), right())),
+                4 | 11 => segs.push((right(), top())),
+                8 | 7 => segs.push((top(), left())),
+                3 | 12 => segs.push((left(), right())),
+                6 | 9 => segs.push((bottom(), top())),
+                5 => {
+                    segs.push((bottom(), left()));
+                    segs.push((right(), top()));
+                }
+                10 => {
+                    segs.push((bottom(), right()));
+                    segs.push((top(), left()));
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+    chain_loops(segs)
+}
+
+/// Chain marching-squares segments into closed loops. Crossing points on a
+/// shared cell edge are computed from the same values in the same order by
+/// both cells, so endpoints match bit-exactly.
+fn chain_loops(segs: Vec<(egui::Pos2, egui::Pos2)>) -> Vec<Vec<egui::Pos2>> {
+    let key = |p: egui::Pos2| (p.x.to_bits(), p.y.to_bits());
+    let mut adj: std::collections::HashMap<(u32, u32), Vec<usize>> = std::collections::HashMap::new();
+    for (idx, (a, b)) in segs.iter().enumerate() {
+        adj.entry(key(*a)).or_default().push(idx);
+        adj.entry(key(*b)).or_default().push(idx);
+    }
+    let mut used = vec![false; segs.len()];
+    let mut loops = Vec::new();
+    for start in 0..segs.len() {
+        if used[start] {
+            continue;
+        }
+        used[start] = true;
+        let (a, b) = segs[start];
+        let mut path = vec![a, b];
+        let mut cur = b;
+        loop {
+            let next = adj
+                .get(&key(cur))
+                .and_then(|c| c.iter().copied().find(|&s| !used[s]));
+            let Some(next) = next else { break };
+            used[next] = true;
+            let (na, nb) = segs[next];
+            cur = if key(na) == key(cur) { nb } else { na };
+            if key(cur) == key(path[0]) {
+                break; // loop closed
+            }
+            path.push(cur);
+        }
+        if path.len() >= 3 {
+            loops.push(path);
+        }
+    }
+    loops
+}
+
+/// A closed loop around an open polyline at distance `d`: one side's
+/// offset points forward, the other side's back, with the end caps pushed
+/// `d` past the line ends. Per-vertex normals come from the neighbouring
+/// points (central difference), which never spikes on sharp turns — at
+/// worst the loop hugs a corner slightly closer than `d`.
+fn outline_around_polyline(line: &[egui::Pos2], d: f32) -> Vec<egui::Pos2> {
+    let n = line.len();
+    let mut left = Vec::with_capacity(2 * n);
+    let mut right = Vec::with_capacity(n);
+    for i in 0..n {
+        let t = line[(i + 1).min(n - 1)] - line[i.saturating_sub(1)];
+        let len = t.length();
+        if len < 1e-6 {
+            continue;
+        }
+        let t = t / len;
+        // Extend the first/last base point along the tangent so the caps
+        // clear the ink tips.
+        let base = match i {
+            0 => line[0] - t * d,
+            _ if i == n - 1 => line[i] + t * d,
+            _ => line[i],
+        };
+        let nrm = egui::vec2(-t.y, t.x);
+        left.push(base + nrm * d);
+        right.push(base - nrm * d);
+    }
+    right.reverse();
+    left.extend(right);
+    left
+}
+
+/// A closed polygon's outline pushed `d` outward. Winding (shoelace sign)
+/// orients the bisector-style vertex normals, which never spike; deeply
+/// concave corners may sit slightly closer than `d`.
+fn outline_around_polygon(poly: &[egui::Pos2], d: f32) -> Vec<egui::Pos2> {
+    let n = poly.len();
+    let area: f32 = (0..n)
+        .map(|i| {
+            let (a, b) = (poly[i], poly[(i + 1) % n]);
+            a.x * b.y - b.x * a.y
+        })
+        .sum();
+    // In screen coords (y down) a positive shoelace sum is a clockwise
+    // polygon, whose outward side is the -90° rotation of the tangent.
+    let sign = if area > 0.0 { -1.0 } else { 1.0 };
+    (0..n)
+        .filter_map(|i| {
+            let t = poly[(i + 1) % n] - poly[(i + n - 1) % n];
+            let len = t.length();
+            (len > 1e-6).then(|| {
+                let nrm = egui::vec2(-t.y, t.x) * (sign / len);
+                poly[i] + nrm * d
+            })
+        })
+        .collect()
 }
 
 /// Device polyline → screen points, dropping consecutive (near-)duplicates:
@@ -942,5 +1289,67 @@ mod tests {
         let p = vm.to_screen(396.0, 306.0);
         let (bx, by) = vm.to_device(p);
         assert!((bx - 396.0).abs() < 1e-3 && (by - 306.0).abs() < 1e-3);
+    }
+
+    /// The highlight outline stays a fixed gap away from the ink: a
+    /// horizontal line gets a closed corridor `d` around it, and a polygon
+    /// outline is pushed outward regardless of its winding.
+    #[test]
+    fn highlight_outlines_keep_their_distance() {
+        // Corridor around a horizontal 2-point line.
+        let line = [egui::pos2(0.0, 5.0), egui::pos2(10.0, 5.0)];
+        let out = outline_around_polyline(&line, 2.0);
+        assert_eq!(out.len(), 4);
+        for v in &out {
+            // 2 above/below the line, caps extended 2 past the ends.
+            assert!((v.y - 3.0).abs() < 1e-4 || (v.y - 7.0).abs() < 1e-4);
+            assert!((-2.0..=12.0).contains(&v.x));
+        }
+        // A square is offset outward for both windings.
+        let square = [
+            egui::pos2(0.0, 0.0),
+            egui::pos2(10.0, 0.0),
+            egui::pos2(10.0, 10.0),
+            egui::pos2(0.0, 10.0),
+        ];
+        for poly in [square, {
+            let mut r = square;
+            r.reverse();
+            r
+        }] {
+            for v in outline_around_polygon(&poly, 2.0) {
+                let inside = (0.0..=10.0).contains(&v.x) && (0.0..=10.0).contains(&v.y);
+                assert!(!inside, "vertex {v:?} not pushed outward");
+            }
+        }
+    }
+
+    /// The set contour: distant clusters get separate loops, each tracing
+    /// the isoline ~SET_GAP away; a dense run of points merges into one.
+    #[test]
+    fn set_contour_follows_clusters() {
+        let bbox = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 60.0));
+        let (a, b) = (egui::pos2(25.0, 30.0), egui::pos2(75.0, 30.0));
+        let mut grid = DistGrid::new(bbox, 3.0);
+        for p in [a, b] {
+            grid.stamp(p, 0.0, 6.0 + 9.0);
+        }
+        let loops = marching_squares(&grid, 6.0);
+        assert_eq!(loops.len(), 2, "two distant points → two loops");
+        for lp in &loops {
+            let c = (lp.iter().fold(egui::Vec2::ZERO, |s, p| s + p.to_vec2()) / lp.len() as f32)
+                .to_pos2();
+            let target = if (c - a).length() < (c - b).length() { a } else { b };
+            for p in lp {
+                let d = (*p - target).length();
+                assert!((3.0..=9.5).contains(&d), "contour should sit ~6 px out, got {d}");
+            }
+        }
+        // A dense run of points merges into a single loop.
+        let mut grid = DistGrid::new(bbox, 3.0);
+        for i in 0..30 {
+            grid.stamp(egui::pos2(20.0 + i as f32 * 2.0, 30.0), 0.0, 15.0);
+        }
+        assert_eq!(marching_squares(&grid, 6.0).len(), 1);
     }
 }

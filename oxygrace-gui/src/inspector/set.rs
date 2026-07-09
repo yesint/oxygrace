@@ -66,7 +66,7 @@ pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, s: usize, edits: &mu
     };
     ui.weak(format!("{} points", set.data.len()));
 
-    rows::section(ui, "Set", true, None, "set_main", |ui| {
+    rows::section(ui, "Set", true, "set_main", |ui| {
         rows::toggle(ui, edits, "Hidden", set.hidden, "set: hidden", move |p, v| {
             p.graphs[g].sets[s].hidden = v;
         });
@@ -78,7 +78,7 @@ pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, s: usize, edits: &mu
         });
     });
 
-    rows::section(ui, "Line", true, None, "set_line", |ui| {
+    rows::section(ui, "Line", true, "set_line", |ui| {
         rows::combo(ui, edits, "Type", set.line_type, &LINE_TYPE_OPTS, "set line: type", move |p, v| {
             p.graphs[g].sets[s].line_type = v;
         });
@@ -105,7 +105,7 @@ pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, s: usize, edits: &mu
         });
     });
 
-    rows::section(ui, "Symbol", true, None, "set_symbol", |ui| {
+    rows::section(ui, "Symbol", true, "set_symbol", |ui| {
         rows::combo(ui, edits, "Type", set.symbol, &SYMBOL_OPTS, "symbol: type", move |p, v| {
             p.graphs[g].sets[s].symbol = v;
         });
@@ -155,7 +155,7 @@ pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, s: usize, edits: &mu
         }
     });
 
-    rows::section(ui, "Fill", false, None, "set_fill", |ui| {
+    rows::section(ui, "Fill", false, "set_fill", |ui| {
         rows::combo(ui, edits, "Type", set.fill_type, &FILL_OPTS, "fill: type", move |p, v| {
             p.graphs[g].sets[s].fill_type = v;
         });
@@ -180,7 +180,7 @@ pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, s: usize, edits: &mu
     });
 
     let e = &set.errbar;
-    rows::section(ui, "Error bars", false, None, "set_errbar", |ui| {
+    rows::section(ui, "Error bars", false, "set_errbar", |ui| {
         rows::toggle(ui, edits, "Show", e.active, "error bars: on", move |p, v| {
             p.graphs[g].sets[s].errbar.active = v;
         });
@@ -211,7 +211,7 @@ pub fn show(ui: &mut egui::Ui, project: &Project, g: usize, s: usize, edits: &mu
     });
 
     let a = &set.avalue;
-    rows::section(ui, "Value labels", false, None, "set_avalue", |ui| {
+    rows::section(ui, "Value labels", false, "set_avalue", |ui| {
         rows::toggle(ui, edits, "Show", a.active, "value labels: on", move |p, v| {
             p.graphs[g].sets[s].avalue.active = v;
         });

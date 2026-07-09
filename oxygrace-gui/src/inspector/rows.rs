@@ -543,21 +543,15 @@ fn dash_preview(ui: &mut egui::Ui, style: i32) {
 }
 
 /// A section header within a page (collapsible, all pages share the look).
-///
-/// `force`: `Some(open)` overrides the stored collapse state this frame —
-/// used when the selection changes, so the relevant section expands and the
-/// others fold away; `None` leaves it interactive.
 pub fn section(
     ui: &mut egui::Ui,
     title: &str,
     default_open: bool,
-    force: Option<bool>,
     id: &str,
     content: impl FnOnce(&mut egui::Ui),
 ) {
     egui::CollapsingHeader::new(egui::RichText::new(title).strong())
         .id_salt(id)
         .default_open(default_open)
-        .open(force)
         .show(ui, content);
 }

@@ -8,11 +8,17 @@ repository.workspace = true
 
 [dependencies]
 oxygrace = { path = "../oxygrace" }
-eframe = "0.34"
+# persistence: settings (Edit → Settings…) survive restarts, natively and
+# in the browser (localStorage).
+eframe = { version = "0.34", features = ["persistence"] }
 egui = "0.34"
 egui_extras = "0.34"
 tiny-skia = "0.11"
 log = "0.4"
+serde = { version = "1", features = ["derive"] }
+# Toolbar icons: embedded Phosphor symbolic icon font (crisp at any DPI,
+# tinted by the current text color, identical on native and wasm).
+egui-phosphor = "0.12"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Native file dialogs only; the web build drives the file input directly.

@@ -1,4 +1,5 @@
-//! Graph page: visibility/type, world window, viewport, scales, titles.
+//! Graph pages: plot area (type/world/viewport), frame, title and subtitle
+//! — one focused page per selectable element.
 
 use oxygrace::model::{GraphType, ScaleType};
 use oxygrace::Project;
@@ -21,29 +22,11 @@ const SCALE_OPTS: [(ScaleType, &str); 4] = [
     (ScaleType::Logit, "Logit"),
 ];
 
-/// Which part of the graph was clicked (drives which sections expand).
-#[derive(Clone, Copy, PartialEq)]
-pub enum Focus {
-    Area,
-    Frame,
-    Title,
-    Subtitle,
-}
-
-pub fn show(
-    ui: &mut egui::Ui,
-    project: &Project,
-    g: usize,
-    focus: Focus,
-    force: bool,
-    edits: &mut Vec<Edit>,
-) {
+/// The plot-area page: graph type, world window, scales, viewport.
+pub fn area(ui: &mut egui::Ui, project: &Project, g: usize, edits: &mut Vec<Edit>) {
     let Some(graph) = project.graphs.get(g) else { return };
-    // On the frame the selection changed, expand the clicked part's
-    // sections and fold the rest.
-    let f = |want: bool| force.then_some(want);
 
-    rows::section(ui, "Graph", focus == Focus::Area, f(focus == Focus::Area), "graph_main", |ui| {
+    rows::section(ui, "Graph", true, "graph_main", |ui| {
         rows::toggle(ui, edits, "Hidden", graph.hidden, "graph: hidden", move |p, v| {
             p.graphs[g].hidden = v;
         });
@@ -58,7 +41,7 @@ pub fn show(
         });
     });
 
-    rows::section(ui, "World", focus == Focus::Area, f(focus == Focus::Area), "graph_world", |ui| {
+    rows::section(ui, "World", true, "graph_world", |ui| {
         let w = graph.world;
         rows::num(ui, edits, "X min", w.xmin, 0.1, "world: xmin", move |p, v| {
             p.graphs[g].world.xmin = v;
@@ -86,7 +69,7 @@ pub fn show(
         });
     });
 
-    rows::section(ui, "Viewport", false, f(false), "graph_view", |ui| {
+    rows::section(ui, "Viewport", true, "graph_view", |ui| {
         let v = graph.view;
         rows::num(ui, edits, "X min", v.xmin, 0.005, "view: xmin", move |p, val| {
             p.graphs[g].view.xmin = val;
@@ -101,9 +84,14 @@ pub fn show(
             p.graphs[g].view.ymax = val;
         });
     });
+}
 
+/// The frame page: outline and background fill.
+pub fn frame(ui: &mut egui::Ui, project: &Project, g: usize, edits: &mut Vec<Edit>) {
+    let Some(graph) = project.graphs.get(g) else { return };
     let fr = &graph.frame;
-    rows::section(ui, "Frame", focus == Focus::Frame, f(focus == Focus::Frame), "graph_frame", |ui| {
+
+    rows::section(ui, "Frame", true, "graph_frame", |ui| {
         rows::int(ui, edits, "Frame type", fr.frame_type, 0..=6, "frame: type", move |p, v| {
             p.graphs[g].frame.frame_type = v;
         });
@@ -120,60 +108,60 @@ pub fn show(
             p.graphs[g].frame.linewidth = v.max(0.0);
         });
     });
-    rows::section(
-        ui,
-        "Frame background",
-        focus == Focus::Frame,
-        f(focus == Focus::Frame),
-        "graph_frame_bg",
-        |ui| {
-            // The model invariant (from the reader): `fill` is on iff the
-            // fill pattern is non-zero — keep both in sync on toggle.
-            rows::toggle(ui, edits, "Fill", fr.fill, "frame: background on", move |p, v| {
-                let f = &mut p.graphs[g].frame;
-                f.fill = v;
-                if v && f.fill_pen.pattern == 0 {
-                    f.fill_pen.pattern = 1;
-                }
-            });
-            rows::color(ui, edits, "Color", fr.fill_pen.color, project, "frame: background color", move |p, v| {
-                p.graphs[g].frame.fill_pen.color = v;
-            });
-            rows::pattern(ui, edits, "Pattern", fr.fill_pen.pattern, "frame: background pattern", move |p, v| {
-                let f = &mut p.graphs[g].frame;
-                f.fill_pen.pattern = v;
-                f.fill = v != 0;
-            });
-        },
-    );
 
-    let l = &graph.labels;
-    rows::section(ui, "Title", focus == Focus::Title, f(focus == Focus::Title), "graph_title", |ui| {
-        rows::text(ui, edits, "Text", &l.title, "title: text", move |p, v| {
-            p.graphs[g].labels.title = v;
+    rows::section(ui, "Background", true, "graph_frame_bg", |ui| {
+        // The model invariant (from the reader): `fill` is on iff the
+        // fill pattern is non-zero — keep both in sync on toggle.
+        rows::toggle(ui, edits, "Fill", fr.fill, "frame: background on", move |p, v| {
+            let f = &mut p.graphs[g].frame;
+            f.fill = v;
+            if v && f.fill_pen.pattern == 0 {
+                f.fill_pen.pattern = 1;
+            }
         });
-        rows::font(ui, edits, "Font", l.title_font, project, "title: font", move |p, v| {
-            p.graphs[g].labels.title_font = v;
+        rows::color(ui, edits, "Color", fr.fill_pen.color, project, "frame: background color", move |p, v| {
+            p.graphs[g].frame.fill_pen.color = v;
         });
-        rows::num(ui, edits, "Size", l.title_size, 0.05, "title: size", move |p, v| {
-            p.graphs[g].labels.title_size = v.max(0.0);
-        });
-        rows::color(ui, edits, "Color", l.title_color, project, "title: color", move |p, v| {
-            p.graphs[g].labels.title_color = v;
+        rows::pattern(ui, edits, "Pattern", fr.fill_pen.pattern, "frame: background pattern", move |p, v| {
+            let f = &mut p.graphs[g].frame;
+            f.fill_pen.pattern = v;
+            f.fill = v != 0;
         });
     });
-    rows::section(ui, "Subtitle", focus == Focus::Subtitle, f(focus == Focus::Subtitle), "graph_subtitle", |ui| {
-        rows::text(ui, edits, "Text", &l.subtitle, "subtitle: text", move |p, v| {
-            p.graphs[g].labels.subtitle = v;
-        });
-        rows::font(ui, edits, "Font", l.subtitle_font, project, "subtitle: font", move |p, v| {
-            p.graphs[g].labels.subtitle_font = v;
-        });
-        rows::num(ui, edits, "Size", l.subtitle_size, 0.05, "subtitle: size", move |p, v| {
-            p.graphs[g].labels.subtitle_size = v.max(0.0);
-        });
-        rows::color(ui, edits, "Color", l.subtitle_color, project, "subtitle: color", move |p, v| {
-            p.graphs[g].labels.subtitle_color = v;
-        });
+}
+
+/// The title page.
+pub fn title(ui: &mut egui::Ui, project: &Project, g: usize, edits: &mut Vec<Edit>) {
+    let Some(graph) = project.graphs.get(g) else { return };
+    let l = &graph.labels;
+    rows::text(ui, edits, "Text", &l.title, "title: text", move |p, v| {
+        p.graphs[g].labels.title = v;
+    });
+    rows::font(ui, edits, "Font", l.title_font, project, "title: font", move |p, v| {
+        p.graphs[g].labels.title_font = v;
+    });
+    rows::num(ui, edits, "Size", l.title_size, 0.05, "title: size", move |p, v| {
+        p.graphs[g].labels.title_size = v.max(0.0);
+    });
+    rows::color(ui, edits, "Color", l.title_color, project, "title: color", move |p, v| {
+        p.graphs[g].labels.title_color = v;
+    });
+}
+
+/// The subtitle page.
+pub fn subtitle(ui: &mut egui::Ui, project: &Project, g: usize, edits: &mut Vec<Edit>) {
+    let Some(graph) = project.graphs.get(g) else { return };
+    let l = &graph.labels;
+    rows::text(ui, edits, "Text", &l.subtitle, "subtitle: text", move |p, v| {
+        p.graphs[g].labels.subtitle = v;
+    });
+    rows::font(ui, edits, "Font", l.subtitle_font, project, "subtitle: font", move |p, v| {
+        p.graphs[g].labels.subtitle_font = v;
+    });
+    rows::num(ui, edits, "Size", l.subtitle_size, 0.05, "subtitle: size", move |p, v| {
+        p.graphs[g].labels.subtitle_size = v.max(0.0);
+    });
+    rows::color(ui, edits, "Color", l.subtitle_color, project, "subtitle: color", move |p, v| {
+        p.graphs[g].labels.subtitle_color = v;
     });
 }

@@ -1,19 +1,11 @@
-//! Axis page: bar, ticks, tick labels and axis label — one page with
-//! collapsible sections; the clicked sub-element's section opens expanded.
+//! Axis pages: the axis itself (placement/bar/ticks), tick labels and the
+//! axis label — one focused page per selectable element.
 
 use oxygrace::model::TickFormat;
 use oxygrace::Project;
 
 use crate::edit::Edit;
 use crate::inspector::{rows, SIDE_OPTS};
-
-/// Which sub-element was clicked (drives which section starts open).
-#[derive(Clone, Copy, PartialEq)]
-pub enum Focus {
-    Bar,
-    TickLabels,
-    Label,
-}
 
 const INOUT_OPTS: [(i32, &str); 3] = [(0, "In"), (1, "Out"), (2, "Both")];
 
@@ -29,23 +21,13 @@ const FORMAT_OPTS: [(TickFormat, &str); 9] = [
     (TickFormat::DegreesLat, "Degrees (lat)"),
 ];
 
-pub fn show(
-    ui: &mut egui::Ui,
-    project: &Project,
-    g: usize,
-    a: usize,
-    focus: Focus,
-    force: bool,
-    edits: &mut Vec<Edit>,
-) {
+/// The axis page: placement, bar, tick marks.
+pub fn bar(ui: &mut egui::Ui, project: &Project, g: usize, a: usize, edits: &mut Vec<Edit>) {
     let Some(axis) = project.graphs.get(g).and_then(|gr| gr.axes.get(a)) else {
         return;
     };
-    // On the frame the selection changed, expand the clicked sub-element's
-    // sections and fold the rest.
-    let f = |want: bool| force.then_some(want);
 
-    rows::section(ui, "Axis", focus == Focus::Bar, f(focus == Focus::Bar), "axis_main", |ui| {
+    rows::section(ui, "Axis", true, "axis_main", |ui| {
         rows::toggle(ui, edits, "Active", axis.active, "axis: active", move |p, v| {
             p.graphs[g].axes[a].active = v;
         });
@@ -66,7 +48,7 @@ pub fn show(
         );
     });
 
-    rows::section(ui, "Bar", focus == Focus::Bar, f(focus == Focus::Bar), "axis_bar", |ui| {
+    rows::section(ui, "Bar", true, "axis_bar", |ui| {
         rows::toggle(ui, edits, "Draw bar", axis.draw_bar, "axis bar: on", move |p, v| {
             p.graphs[g].axes[a].draw_bar = v;
         });
@@ -81,7 +63,7 @@ pub fn show(
         });
     });
 
-    rows::section(ui, "Ticks", focus == Focus::Bar, f(focus == Focus::Bar), "axis_ticks", |ui| {
+    rows::section(ui, "Ticks", true, "axis_ticks", |ui| {
         rows::toggle(ui, edits, "Draw ticks", axis.ticks, "ticks: on", move |p, v| {
             p.graphs[g].axes[a].ticks = v;
         });
@@ -124,67 +106,75 @@ pub fn show(
             p.graphs[g].axes[a].minor_props.grid = v;
         });
     });
+}
 
-    rows::section(ui, "Tick labels", focus == Focus::TickLabels, f(focus == Focus::TickLabels), "axis_tl", |ui| {
-        rows::toggle(ui, edits, "Show", axis.ticklabels, "tick labels: on", move |p, v| {
-            p.graphs[g].axes[a].ticklabels = v;
-        });
-        rows::combo(ui, edits, "Format", axis.tl_format, &FORMAT_OPTS, "tick labels: format", move |p, v| {
-            p.graphs[g].axes[a].tl_format = v;
-        });
-        rows::int(ui, edits, "Precision", axis.tl_prec, 0..=12, "tick labels: precision", move |p, v| {
-            p.graphs[g].axes[a].tl_prec = v;
-        });
-        rows::num(ui, edits, "Char size", axis.tl_charsize, 0.05, "tick labels: size", move |p, v| {
-            p.graphs[g].axes[a].tl_charsize = v.max(0.0);
-        });
-        rows::font(ui, edits, "Font", axis.tl_font, project, "tick labels: font", move |p, v| {
-            p.graphs[g].axes[a].tl_font = v;
-        });
-        rows::color(ui, edits, "Color", axis.tl_color, project, "tick labels: color", move |p, v| {
-            p.graphs[g].axes[a].tl_color = v;
-        });
-        rows::int(ui, edits, "Angle", axis.tl_angle, -360..=360, "tick labels: angle", move |p, v| {
-            p.graphs[g].axes[a].tl_angle = v;
-        });
-        rows::int(ui, edits, "Skip", axis.tl_skip, 0..=20, "tick labels: skip", move |p, v| {
-            p.graphs[g].axes[a].tl_skip = v;
-        });
-        rows::int(ui, edits, "Stagger", axis.tl_stagger, 0..=5, "tick labels: stagger", move |p, v| {
-            p.graphs[g].axes[a].tl_stagger = v;
-        });
-        rows::text(ui, edits, "Prepend", &axis.tl_prepend, "tick labels: prepend", move |p, v| {
-            p.graphs[g].axes[a].tl_prepend = v;
-        });
-        rows::text(ui, edits, "Append", &axis.tl_append, "tick labels: append", move |p, v| {
-            p.graphs[g].axes[a].tl_append = v;
-        });
-        rows::text(ui, edits, "Formula ($t)", &axis.tl_formula, "tick labels: formula", move |p, v| {
-            p.graphs[g].axes[a].tl_formula = v;
-        });
-        rows::combo(ui, edits, "Placement", axis.tl_op, &SIDE_OPTS, "tick labels: placement", move |p, v| {
-            p.graphs[g].axes[a].tl_op = v;
-        });
+/// The tick-labels page.
+pub fn tick_labels(ui: &mut egui::Ui, project: &Project, g: usize, a: usize, edits: &mut Vec<Edit>) {
+    let Some(axis) = project.graphs.get(g).and_then(|gr| gr.axes.get(a)) else {
+        return;
+    };
+    rows::toggle(ui, edits, "Show", axis.ticklabels, "tick labels: on", move |p, v| {
+        p.graphs[g].axes[a].ticklabels = v;
     });
+    rows::combo(ui, edits, "Format", axis.tl_format, &FORMAT_OPTS, "tick labels: format", move |p, v| {
+        p.graphs[g].axes[a].tl_format = v;
+    });
+    rows::int(ui, edits, "Precision", axis.tl_prec, 0..=12, "tick labels: precision", move |p, v| {
+        p.graphs[g].axes[a].tl_prec = v;
+    });
+    rows::num(ui, edits, "Char size", axis.tl_charsize, 0.05, "tick labels: size", move |p, v| {
+        p.graphs[g].axes[a].tl_charsize = v.max(0.0);
+    });
+    rows::font(ui, edits, "Font", axis.tl_font, project, "tick labels: font", move |p, v| {
+        p.graphs[g].axes[a].tl_font = v;
+    });
+    rows::color(ui, edits, "Color", axis.tl_color, project, "tick labels: color", move |p, v| {
+        p.graphs[g].axes[a].tl_color = v;
+    });
+    rows::int(ui, edits, "Angle", axis.tl_angle, -360..=360, "tick labels: angle", move |p, v| {
+        p.graphs[g].axes[a].tl_angle = v;
+    });
+    rows::int(ui, edits, "Skip", axis.tl_skip, 0..=20, "tick labels: skip", move |p, v| {
+        p.graphs[g].axes[a].tl_skip = v;
+    });
+    rows::int(ui, edits, "Stagger", axis.tl_stagger, 0..=5, "tick labels: stagger", move |p, v| {
+        p.graphs[g].axes[a].tl_stagger = v;
+    });
+    rows::text(ui, edits, "Prepend", &axis.tl_prepend, "tick labels: prepend", move |p, v| {
+        p.graphs[g].axes[a].tl_prepend = v;
+    });
+    rows::text(ui, edits, "Append", &axis.tl_append, "tick labels: append", move |p, v| {
+        p.graphs[g].axes[a].tl_append = v;
+    });
+    rows::text(ui, edits, "Formula ($t)", &axis.tl_formula, "tick labels: formula", move |p, v| {
+        p.graphs[g].axes[a].tl_formula = v;
+    });
+    rows::combo(ui, edits, "Placement", axis.tl_op, &SIDE_OPTS, "tick labels: placement", move |p, v| {
+        p.graphs[g].axes[a].tl_op = v;
+    });
+}
 
-    rows::section(ui, "Axis label", focus == Focus::Label, f(focus == Focus::Label), "axis_label", |ui| {
-        rows::text(ui, edits, "Text", &axis.label, "axis label: text", move |p, v| {
-            p.graphs[g].axes[a].label = v;
-        });
-        rows::toggle(ui, edits, "Perpendicular", axis.label_perp, "axis label: layout", move |p, v| {
-            p.graphs[g].axes[a].label_perp = v;
-        });
-        rows::num(ui, edits, "Char size", axis.label_charsize, 0.05, "axis label: size", move |p, v| {
-            p.graphs[g].axes[a].label_charsize = v.max(0.0);
-        });
-        rows::font(ui, edits, "Font", axis.label_font, project, "axis label: font", move |p, v| {
-            p.graphs[g].axes[a].label_font = v;
-        });
-        rows::color(ui, edits, "Color", axis.label_color, project, "axis label: color", move |p, v| {
-            p.graphs[g].axes[a].label_color = v;
-        });
-        rows::combo(ui, edits, "Placement", axis.label_op, &SIDE_OPTS, "axis label: placement", move |p, v| {
-            p.graphs[g].axes[a].label_op = v;
-        });
+/// The axis-label page.
+pub fn label(ui: &mut egui::Ui, project: &Project, g: usize, a: usize, edits: &mut Vec<Edit>) {
+    let Some(axis) = project.graphs.get(g).and_then(|gr| gr.axes.get(a)) else {
+        return;
+    };
+    rows::text(ui, edits, "Text", &axis.label, "axis label: text", move |p, v| {
+        p.graphs[g].axes[a].label = v;
+    });
+    rows::toggle(ui, edits, "Perpendicular", axis.label_perp, "axis label: layout", move |p, v| {
+        p.graphs[g].axes[a].label_perp = v;
+    });
+    rows::num(ui, edits, "Char size", axis.label_charsize, 0.05, "axis label: size", move |p, v| {
+        p.graphs[g].axes[a].label_charsize = v.max(0.0);
+    });
+    rows::font(ui, edits, "Font", axis.label_font, project, "axis label: font", move |p, v| {
+        p.graphs[g].axes[a].label_font = v;
+    });
+    rows::color(ui, edits, "Color", axis.label_color, project, "axis label: color", move |p, v| {
+        p.graphs[g].axes[a].label_color = v;
+    });
+    rows::combo(ui, edits, "Placement", axis.label_op, &SIDE_OPTS, "axis label: placement", move |p, v| {
+        p.graphs[g].axes[a].label_op = v;
     });
 }

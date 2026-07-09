@@ -144,6 +144,26 @@ pub fn map_font_char(face: i32, code: u32) -> char {
     char::from_u32(code).unwrap_or('\u{FFFD}')
 }
 
+/// Transliterate one Adobe-Symbol-encoded character to the Unicode
+/// character it *displays* as (Greek letters; other codes pass through
+/// unchanged). The renderer never needs this — StandardSymbolsPS maps the
+/// 8-bit codes through its own cmap — but UI labels (GUI tree, status bar)
+/// need real codepoints to show `\xa` as an alpha.
+pub fn symbol_to_unicode(c: char) -> char {
+    match c {
+        'A' => 'Α', 'B' => 'Β', 'G' => 'Γ', 'D' => 'Δ', 'E' => 'Ε', 'Z' => 'Ζ',
+        'H' => 'Η', 'Q' => 'Θ', 'I' => 'Ι', 'K' => 'Κ', 'L' => 'Λ', 'M' => 'Μ',
+        'N' => 'Ν', 'X' => 'Ξ', 'O' => 'Ο', 'P' => 'Π', 'R' => 'Ρ', 'S' => 'Σ',
+        'T' => 'Τ', 'U' => 'Υ', 'F' => 'Φ', 'C' => 'Χ', 'Y' => 'Ψ', 'W' => 'Ω',
+        'a' => 'α', 'b' => 'β', 'g' => 'γ', 'd' => 'δ', 'e' => 'ε', 'z' => 'ζ',
+        'h' => 'η', 'q' => 'θ', 'i' => 'ι', 'k' => 'κ', 'l' => 'λ', 'm' => 'μ',
+        'n' => 'ν', 'x' => 'ξ', 'o' => 'ο', 'p' => 'π', 'r' => 'ρ', 's' => 'σ',
+        't' => 'τ', 'u' => 'υ', 'f' => 'φ', 'c' => 'χ', 'y' => 'ψ', 'w' => 'ω',
+        'J' => 'ϑ', 'j' => 'ϕ', 'V' => 'ς', 'v' => 'ϖ',
+        _ => c,
+    }
+}
+
 /// A glyph outline as a tiny-skia path in em units (Y up), plus its advance.
 pub struct GlyphOutline {
     pub path: Option<tiny_skia::Path>,
