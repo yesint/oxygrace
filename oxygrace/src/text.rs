@@ -117,6 +117,10 @@ enum Item {
 /// Parse Grace markup into items, starting from a base font *slot*; the
 /// produced runs carry resolved *face* indices via `map`.
 fn parse_items(input: &str, base_font: i32, map: &FontMap) -> Vec<Item> {
+    // LaTeX math regions (`$...$`) become native markup first; strings
+    // without one pass through unchanged (see `latex::expand`).
+    let expanded = crate::latex::expand(input);
+    let input: &str = &expanded;
     let mut items: Vec<Item> = Vec::new();
     // `font` always holds a resolved *face*: numeric selections go through
     // the slot map (get_mapped_font), names and \x resolve directly by name
@@ -646,5 +650,17 @@ mod tests {
         assert_eq!(p(r"\f{Courier-Bold}BarDY\f{} type"), "BarDY type");
         assert_eq!(p("line one\\nline two"), "line one line two");
         assert_eq!(p(r"\xDW\f{}"), "ΔΩ");
+    }
+
+    /// LaTeX math regions expand before parsing, so every text surface
+    /// (rendering and plain labels alike) understands them.
+    #[test]
+    fn latex_regions_flatten_to_unicode() {
+        let p = |s: &str| super::plain(s, 0, &FONT_MAP_DEFAULT);
+        assert_eq!(p(r"$\alpha_i^2$"), "αi2");
+        assert_eq!(p(r"$x \pm \sqrt{2}$"), "x±√2");
+        assert_eq!(p(r"rate $\lambda \to \infty$ (a.u.)"), "rate λ→∞ (a.u.)");
+        // Unpaired dollars stay literal.
+        assert_eq!(p("$t/PI"), "$t/PI");
     }
 }

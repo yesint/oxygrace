@@ -18,6 +18,7 @@ pub mod draw;
 pub mod font;
 pub mod format;
 pub mod import;
+pub mod latex;
 pub mod model;
 pub mod parse;
 pub mod patterns;

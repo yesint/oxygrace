@@ -301,6 +301,26 @@ with positions, unlike the tolerant `.agr` reader); GUI dialogs and
 `args.rs` accept it; web open dispatches; the CLI converts formats when
 `-o` has a project extension (`oxygrace in.agr -o out.oxgr`).
 
+**LaTeX text markup (oxygrace extension):** paired `$...$` math regions
+in any text string (titles, axis labels, legends, strings, tick labels)
+are transpiled to native Grace markup by `oxygrace/src/latex.rs`
+(`latex::expand`, hooked at the top of `text.rs parse_items`, so both
+render backends, `text::plain` GUI labels and hit-testing get it for
+free — zero new dependencies). Coverage: Greek + Adobe-Symbol operators,
+nested `^`/`_` (a combined `x_i^2` stacks via `\m`/`\M` pen marks; the
+emitter mirrors the engine's size/vshift state and emits exact-inverse
+`\v`/`\z` pairs), `\sqrt` (radical char + overlined radicand — known
+wart: a sup inside the radicand raises its overline segment),
+`\bar`/`\overline`/`\underline`, `\mathrm`/`\mathbf`/`\mathit`/`\text`,
+upright function names, spacing, textual `\frac` (`a/b`). Math variables
+render Times-Italic, digits/punctuation in the label's own font.
+Strictness keeps old files byte-identical (corpus round-trip tests
+guard it): no paired non-empty `$...$` → string passes through
+`Cow::Borrowed`; an unparseable region is emitted literally with its
+dollars; `\$` escapes a literal dollar. The LaTeX source is what gets
+saved — plain Grace shows it as raw text. `font::symbol_to_unicode`
+also maps the Symbol operator high codes so tree labels read `≤ ∞ →` etc.
+
 **Alpha channels (QtGrace extension):** per-set pen opacities ride in
 `#QTGRACE_ADDITIONAL_PARAMETER: G n S m ALPHA_CHANNELS
 {line;fill;sym;symfill;avalue;errbar}` comment lines (QtGrace files.cpp;
@@ -412,7 +432,10 @@ bundled example. Bundle via trunk (`oxygrace-gui/index.html`,
 Actions"). Verified end-to-end in headless Chromium: UI + plot render in
 the browser, System theme follows `prefers-color-scheme`.
 
-**GUI toolbar (done):** an icon-only toolbar (`icons.rs` — glyphs from
+**GUI toolbar (done):** the File/Edit/View menu bar renders inline at
+the top of the left column (not a window-wide top panel — the canvas
+and inspector reach the window top); below it an icon-only toolbar
+(`icons.rs` — glyphs from
 the embedded Phosphor icon font, `egui-phosphor`; installed into egui's
 fonts at startup, tinted by the current text color so they track the
 theme, crisp at any DPI via the text pipeline) above the
@@ -441,10 +464,15 @@ whose selectable header is the graph itself ("Graph 0 — title", same
 name as the breadcrumb; there is no separate "Plot area" row),
 Frame/Title/Subtitle rows are always present (dimmed when empty) so
 not-yet-drawn elements stay reachable, and each axis is a collapsing
-node with Tick labels / Label children. On the frame the selection
-changes (canvas click, breadcrumb) the tree force-opens collapsed
-ancestors of the selected element (`tree::show`'s `reveal`, driven by
-`App.prev_selection`), so the highlighted row is never hidden. Labels
+node with Tick labels / Label children. When the selection changes
+(canvas click, breadcrumb) the tree force-opens collapsed ancestors of
+the selected element and scrolls its row into view (`tree::show`'s
+`reveal` + `Response::scroll_to_me`); the reveal window spans ~30 frames
+(`App.reveal_frames`) because egui's expand/scroll animations are
+wall-clock based — the row's final position only exists once they
+settle. Debug hooks: `OXYGRACE_GUI_SELECT_LATE` changes the selection at
+frame 5 (exercises this path like a canvas click); `OXYGRACE_GUI_SHOT`
+mode freezes all animations for deterministic screenshots. Labels
 with Grace markup are
 flattened for tree/status display by `oxygrace::text::plain` (escapes
 interpreted and dropped, Symbol runs transliterated to Greek via
@@ -453,7 +481,12 @@ font cmap, UI toolkits need codepoints). Edit → Settings… opens a
 Settings window with a layout
 toggle (`Settings.inspector_below`): properties right of the plot
 (default) or stacked below the project tree in one left panel (more
-canvas width). Settings persist via eframe storage (`persistence`
+canvas width). The stacked tree/properties divider is a hand-rolled
+splitter (`App::stacked_split`) storing a *fraction* in
+`Settings.stack_split` (default 50/50) — egui's own panel state stores
+absolute content heights, which inherit the unsized first frame and
+shrink when a short page is shown. Settings persist via eframe storage
+(`persistence`
 feature — also persists egui memory: panel sizes, collapse states);
 debug hook `OXYGRACE_GUI_LAYOUT=stacked|right`.
 
