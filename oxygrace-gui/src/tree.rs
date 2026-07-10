@@ -12,9 +12,12 @@ pub(crate) const AXIS_NAMES: [&str; 4] = ["X axis", "Y axis", "Alt X axis", "Alt
 /// Returns true when a row was clicked (the app then resets click-cycling
 /// state such as the armed rotation).
 ///
-/// `reveal` is true on the frame the selection changed (canvas click,
-/// breadcrumb): collapsed ancestor nodes of the selected element then
-/// expand, so the highlighted row is always brought into view.
+/// `reveal` is true for a short window of frames after the selection
+/// changed (canvas click, breadcrumb): collapsed ancestor nodes of the
+/// selected element expand and the tree scrolls the selected row into
+/// view. It stays true for several frames — not just one — because egui's
+/// expand and scroll animations are wall-clock based, so the row's final
+/// position only exists once they settle.
 pub fn show(
     ui: &mut egui::Ui,
     project: &Project,
@@ -55,10 +58,10 @@ pub fn show(
             }
             state
                 .show_header(ui, |ui| {
-                    row(ui, selection, clicked, ElementId::Graph(g), &title, graph.hidden);
+                    row(ui, selection, clicked, ElementId::Graph(g), &title, graph.hidden, reveal);
                 })
                 .body(|ui| {
-                    row(ui, selection, clicked, ElementId::Frame(g), "Frame", false);
+                    row(ui, selection, clicked, ElementId::Frame(g), "Frame", false, reveal);
                     row(
                         ui,
                         selection,
@@ -66,6 +69,7 @@ pub fn show(
                         ElementId::Title(g),
                         "Title",
                         graph.labels.title.is_empty(),
+                        reveal,
                     );
                     row(
                         ui,
@@ -74,6 +78,7 @@ pub fn show(
                         ElementId::Subtitle(g),
                         "Subtitle",
                         graph.labels.subtitle.is_empty(),
+                        reveal,
                     );
                     row(
                         ui,
@@ -82,6 +87,7 @@ pub fn show(
                         ElementId::Legend(g),
                         "Legend",
                         !graph.legend.active,
+                        reveal,
                     );
                     let in_axes = matches!(sel,
                         Some(AxisBar { graph, .. } | TickLabels { graph, .. }
@@ -116,6 +122,7 @@ pub fn show(
                                     ElementId::Set { graph: g, set: s },
                                     &label,
                                     set.hidden,
+                                    reveal,
                                 );
                             }
                         });
@@ -136,13 +143,13 @@ pub fn show(
                     for (i, s) in project.strings.iter().enumerate() {
                         let text = plain(project, s.font, &s.text);
                         let label = format!("String {i} — {}", truncate(&text, 20));
-                        row(ui, selection, clicked, ElementId::StringObj(i), &label, !s.active);
+                        row(ui, selection, clicked, ElementId::StringObj(i), &label, !s.active, reveal);
                     }
                     for (i, l) in project.lines.iter().enumerate() {
-                        row(ui, selection, clicked, ElementId::LineObj(i), &format!("Line {i}"), !l.active);
+                        row(ui, selection, clicked, ElementId::LineObj(i), &format!("Line {i}"), !l.active, reveal);
                     }
                     for (i, b) in project.boxes.iter().enumerate() {
-                        row(ui, selection, clicked, ElementId::BoxObj(i), &format!("Box {i}"), !b.active);
+                        row(ui, selection, clicked, ElementId::BoxObj(i), &format!("Box {i}"), !b.active, reveal);
                     }
                     for (i, e) in project.ellipses.iter().enumerate() {
                         row(
@@ -152,12 +159,13 @@ pub fn show(
                             ElementId::EllipseObj(i),
                             &format!("Ellipse {i}"),
                             !e.active,
+                            reveal,
                         );
                     }
                 });
         }
         if project.timestamp.active {
-            row(ui, selection, clicked, ElementId::Timestamp, "Timestamp", false);
+            row(ui, selection, clicked, ElementId::Timestamp, "Timestamp", false, reveal);
         }
     });
     *clicked
@@ -205,7 +213,7 @@ fn axis_node(
     }
     state
     .show_header(ui, |ui| {
-        row(ui, selection, clicked, ElementId::AxisBar { graph: g, axis: a }, name, !axis.active);
+        row(ui, selection, clicked, ElementId::AxisBar { graph: g, axis: a }, name, !axis.active, reveal);
     })
     .body(|ui| {
         row(
@@ -215,6 +223,7 @@ fn axis_node(
             ElementId::TickLabels { graph: g, axis: a },
             "Tick labels",
             !axis.active || !axis.ticklabels,
+            reveal,
         );
         row(
             ui,
@@ -223,11 +232,14 @@ fn axis_node(
             ElementId::AxisLabel { graph: g, axis: a },
             "Label",
             !axis.active || axis.label.is_empty(),
+            reveal,
         );
     });
 }
 
-/// One selectable tree row; `dim` grays out hidden/inactive elements.
+/// One selectable tree row; `dim` grays out hidden/inactive elements. On
+/// the reveal frame (selection freshly changed elsewhere) the selected row
+/// scrolls into view if it is outside the visible tree.
 fn row(
     ui: &mut egui::Ui,
     selection: &mut Option<ElementId>,
@@ -235,13 +247,22 @@ fn row(
     id: ElementId,
     text: &str,
     dim: bool,
+    reveal: bool,
 ) {
     let text = if dim {
         egui::RichText::new(text).weak()
     } else {
         egui::RichText::new(text)
     };
-    if ui.selectable_label(*selection == Some(id), text).clicked() {
+    let resp = ui.selectable_label(*selection == Some(id), text);
+    if reveal && *selection == Some(id) {
+        // Scroll to the row's *left edge* only: targeting the full rect
+        // would also scroll horizontally to fit long labels, shoving the
+        // whole tree sideways.
+        let edge = egui::Rect::from_min_size(resp.rect.min, egui::vec2(1.0, resp.rect.height()));
+        ui.scroll_to_rect(edge, None);
+    }
+    if resp.clicked() {
         *selection = Some(id);
         *clicked = true;
     }

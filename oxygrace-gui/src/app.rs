@@ -20,12 +20,21 @@ pub enum Tool {
 
 /// User preferences (Edit → Settings…), persisted across sessions via
 /// eframe storage.
-#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// Stack the properties inspector below the project tree in the left
     /// panel instead of using a separate right-side panel.
     pub inspector_below: bool,
+    /// Stacked layout: fraction of the panel height given to the tree
+    /// (the splitter position).
+    pub stack_split: f32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings { inspector_below: false, stack_split: 0.5 }
+    }
 }
 
 /// eframe storage key for [`Settings`].
@@ -47,6 +56,10 @@ pub struct App {
     /// Selection as of the last frame: when it differs, the tree expands
     /// collapsed ancestors so the newly selected row is visible.
     prev_selection: Option<ElementId>,
+    /// Frames left in the tree's reveal window after a selection change:
+    /// ancestors stay forced open and the selected row keeps scrolling
+    /// into view until egui's wall-clock expand/scroll animations settle.
+    reveal_frames: u8,
     /// Device position of the last canvas click — clicking the same spot
     /// again cycles through overlapping elements.
     pub last_click: Option<(f32, f32)>,
@@ -105,6 +118,14 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::icons::install(&cc.egui_ctx);
         crate::theme::apply(&cc.egui_ctx, crate::theme::Mode::Dark);
+        // Screenshot/CI mode: animations are wall-clock based and headless
+        // frames run in milliseconds, so freeze them for determinism.
+        if std::env::var("OXYGRACE_GUI_SHOT").is_ok() {
+            cc.egui_ctx.global_style_mut(|s| {
+                s.animation_time = 0.0;
+                s.scroll_animation = egui::style::ScrollAnimation::none();
+            });
+        }
         #[cfg(target_arch = "wasm32")]
         let (file_tx, file_rx) = std::sync::mpsc::channel();
         let mut app = App {
@@ -117,6 +138,7 @@ impl App {
             render_info: None,
             selection: None,
             prev_selection: None,
+            reveal_frames: 0,
             last_click: None,
             hover: None,
             drag: None,
@@ -288,6 +310,14 @@ impl App {
             return;
         };
         self.frames += 1;
+        // Debug/CI hook: change the selection mid-run (at frame 5), which
+        // exercises the reveal/scroll-to-selection path exactly like a
+        // canvas click (the tree has long been drawn with stored state).
+        if self.frames == 5 {
+            if let Ok(spec) = std::env::var("OXYGRACE_GUI_SELECT_LATE") {
+                self.selection = parse_element_spec(&spec);
+            }
+        }
         ctx.request_repaint(); // keep frames flowing while we wait
         if self.frames == 10 {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
@@ -310,74 +340,74 @@ impl App {
         }
     }
 
+    /// The File/Edit/View menu bar, rendered inline at the top of the left
+    /// column (not a window-wide panel).
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("menu").show_inside(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                let (file_resp, _) = egui::containers::menu::MenuButton::new("File").ui(ui, |ui| {
-                    if ui.button("Open…").clicked() {
-                        crate::file::open_dialog(self);
-                    }
-                    ui.separator();
-                    let has_project = self.project.is_some();
-                    if ui
-                        .add_enabled(has_project, egui::Button::new("Save"))
-                        .clicked()
-                    {
-                        crate::file::save(self);
-                    }
-                    if ui
-                        .add_enabled(has_project, egui::Button::new("Save As…"))
-                        .clicked()
-                    {
-                        crate::file::save_as(self);
-                    }
-                    ui.separator();
-                    if ui.button("Quit").clicked() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                });
-                let (edit_resp, _) = egui::containers::menu::MenuButton::new("Edit").ui(ui, |ui| {
-                    let undo_text = match self.undo.undo_label() {
-                        Some(l) => format!("Undo {l}"),
-                        None => "Undo".into(),
-                    };
-                    if ui
-                        .add_enabled(self.undo.undo_label().is_some(), egui::Button::new(undo_text))
-                        .clicked()
-                    {
-                        self.undo_action();
-                    }
-                    let redo_text = match self.undo.redo_label() {
-                        Some(l) => format!("Redo {l}"),
-                        None => "Redo".into(),
-                    };
-                    if ui
-                        .add_enabled(self.undo.redo_label().is_some(), egui::Button::new(redo_text))
-                        .clicked()
-                    {
-                        self.redo_action();
-                    }
-                    ui.separator();
-                    if ui.button("Settings…").clicked() {
-                        self.show_settings = true;
-                    }
-                });
-                let (view_resp, _) = egui::containers::menu::MenuButton::new("View").ui(ui, |ui| {
-                    if ui
-                        .checkbox(&mut self.free_aspect, "Free aspect")
-                        .on_hover_text("Page follows the window size (xmgrace -free)")
-                        .changed()
-                    {
-                        self.toggle_free_aspect();
-                    }
-                    ui.separator();
-                    ui.label(egui::RichText::new("Mode").weak());
-                    ui.radio_value(&mut self.theme_pref, crate::theme::Pref::System, "System");
-                    ui.radio_value(&mut self.theme_pref, crate::theme::Pref::Dark, "Dark");
-                    ui.radio_value(&mut self.theme_pref, crate::theme::Pref::Light, "Light");
-                });
-                menu_hover_follow(ui.ctx(), &[file_resp, edit_resp, view_resp]);
+        egui::MenuBar::new().ui(ui, |ui| {
+            let (file_resp, _) = egui::containers::menu::MenuButton::new("File").ui(ui, |ui| {
+                if ui.button("Open…").clicked() {
+                    crate::file::open_dialog(self);
+                }
+                ui.separator();
+                let has_project = self.project.is_some();
+                if ui
+                    .add_enabled(has_project, egui::Button::new("Save"))
+                    .clicked()
+                {
+                    crate::file::save(self);
+                }
+                if ui
+                    .add_enabled(has_project, egui::Button::new("Save As…"))
+                    .clicked()
+                {
+                    crate::file::save_as(self);
+                }
+                ui.separator();
+                if ui.button("Quit").clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
             });
+            let (edit_resp, _) = egui::containers::menu::MenuButton::new("Edit").ui(ui, |ui| {
+                let undo_text = match self.undo.undo_label() {
+                    Some(l) => format!("Undo {l}"),
+                    None => "Undo".into(),
+                };
+                if ui
+                    .add_enabled(self.undo.undo_label().is_some(), egui::Button::new(undo_text))
+                    .clicked()
+                {
+                    self.undo_action();
+                }
+                let redo_text = match self.undo.redo_label() {
+                    Some(l) => format!("Redo {l}"),
+                    None => "Redo".into(),
+                };
+                if ui
+                    .add_enabled(self.undo.redo_label().is_some(), egui::Button::new(redo_text))
+                    .clicked()
+                {
+                    self.redo_action();
+                }
+                ui.separator();
+                if ui.button("Settings…").clicked() {
+                    self.show_settings = true;
+                }
+            });
+            let (view_resp, _) = egui::containers::menu::MenuButton::new("View").ui(ui, |ui| {
+                if ui
+                    .checkbox(&mut self.free_aspect, "Free aspect")
+                    .on_hover_text("Page follows the window size (xmgrace -free)")
+                    .changed()
+                {
+                    self.toggle_free_aspect();
+                }
+                ui.separator();
+                ui.label(egui::RichText::new("Mode").weak());
+                ui.radio_value(&mut self.theme_pref, crate::theme::Pref::System, "System");
+                ui.radio_value(&mut self.theme_pref, crate::theme::Pref::Dark, "Dark");
+                ui.radio_value(&mut self.theme_pref, crate::theme::Pref::Light, "Light");
+            });
+            menu_hover_follow(ui.ctx(), &[file_resp, edit_resp, view_resp]);
         });
     }
 
@@ -415,6 +445,62 @@ impl App {
         for e in edits {
             self.apply_edit(e);
         }
+    }
+
+    /// The stacked layout's tree-over-properties split with a draggable
+    /// divider. Hand-rolled rather than a nested egui panel: the split is
+    /// a *fraction* kept in [`Settings`] (default 50/50, persisted,
+    /// proportional across window resizes), whereas egui panel state
+    /// stores absolute content heights — which both inherit the unsized
+    /// first frame and shrink whenever a short page is shown.
+    fn stacked_split(&mut self, ui: &mut egui::Ui, reveal: bool) {
+        const HANDLE: f32 = 8.0;
+        let rect = ui.available_rect_before_wrap();
+        let usable = (rect.height() - HANDLE).max(0.0);
+        let split = self.settings.stack_split.clamp(0.1, 0.9);
+        let tree_h = usable * split;
+        let width = rect.width();
+        let tree_rect = egui::Rect::from_min_size(rect.min, egui::vec2(width, tree_h));
+        let handle_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.min.x, tree_rect.max.y),
+            egui::vec2(width, HANDLE),
+        );
+        let insp_rect =
+            egui::Rect::from_min_max(egui::pos2(rect.min.x, handle_rect.max.y), rect.max);
+
+        let clip = ui.clip_rect();
+        let mut region = |r: egui::Rect, salt: &str| {
+            let mut child = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt(salt)
+                    .max_rect(r)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            child.set_clip_rect(r.intersect(clip));
+            child
+        };
+        self.tree_panel(&mut region(tree_rect, "stack_tree"), reveal);
+        self.inspector_panel(&mut region(insp_rect, "stack_insp"));
+
+        // The divider: drag to move the split, styled like a panel edge.
+        let resp = ui.interact(handle_rect, ui.id().with("stack_split"), egui::Sense::drag());
+        if resp.dragged() && usable > 0.0 {
+            let new_tree_h = (tree_h + resp.drag_delta().y).clamp(0.0, usable);
+            self.settings.stack_split = (new_tree_h / usable).clamp(0.1, 0.9);
+        }
+        if resp.hovered() || resp.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        }
+        let w = &ui.style().visuals.widgets;
+        let stroke = if resp.dragged() {
+            w.active.fg_stroke
+        } else if resp.hovered() {
+            w.hovered.fg_stroke
+        } else {
+            w.noninteractive.bg_stroke
+        };
+        ui.painter()
+            .hline(handle_rect.x_range(), handle_rect.center().y, stroke);
     }
 
     /// The Settings window (Edit → Settings…); choices persist across
@@ -768,11 +854,19 @@ impl eframe::App for App {
         // entry (only the first char of a field is accepted). See `defuse_broken_ime`.
         #[cfg(target_os = "linux")]
         defuse_broken_ime(ui.ctx());
-        self.menu_bar(ui);
-        // Selection changed since the last frame (canvas click, breadcrumb):
-        // the tree reveals the newly selected row this frame.
-        let reveal = self.selection != self.prev_selection;
-        self.prev_selection = self.selection;
+        // Selection changed (canvas click, breadcrumb): the tree reveals the
+        // newly selected row. The reveal window spans several frames because
+        // egui's expand and scroll animations are wall-clock based — the
+        // row's final position only exists once they settle (~0.3 s).
+        if self.selection != self.prev_selection {
+            self.prev_selection = self.selection;
+            self.reveal_frames = 30;
+        }
+        let reveal = self.reveal_frames > 0;
+        if reveal {
+            self.reveal_frames -= 1;
+            ui.ctx().request_repaint(); // keep the animations settling
+        }
         // Note: egui persists panel sizes by id — the two layouts use
         // distinct ids so each remembers its own size (bump the suffix when
         // changing a size policy, or stale stored sizes win).
@@ -784,15 +878,11 @@ impl eframe::App for App {
                 .default_size(300.0)
                 .size_range(220.0..=520.0)
                 .show_inside(ui, |ui| {
+                    self.menu_bar(ui);
+                    ui.separator();
                     self.toolbar(ui);
                     ui.separator();
-                    egui::Panel::bottom("inspector_stack_v1")
-                        .resizable(true)
-                        .default_size(320.0)
-                        .size_range(100.0..=800.0)
-                        .show_inside(ui, |ui| self.inspector_panel(ui));
-                    egui::CentralPanel::default()
-                        .show_inside(ui, |ui| self.tree_panel(ui, reveal));
+                    self.stacked_split(ui, reveal);
                 });
         } else {
             egui::Panel::left("tree_v2")
@@ -800,6 +890,8 @@ impl eframe::App for App {
                 .default_size(220.0)
                 .size_range(140.0..=380.0)
                 .show_inside(ui, |ui| {
+                    self.menu_bar(ui);
+                    ui.separator();
                     self.toolbar(ui);
                     ui.separator();
                     self.tree_panel(ui, reveal);
