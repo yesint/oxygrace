@@ -32,7 +32,9 @@ pub fn show(
     let open_if = |cond: bool| (reveal && cond).then_some(true);
     // Scroll both ways: long labels scroll horizontally instead of setting
     // a minimum panel width, so the panel can be made arbitrarily narrow.
-    egui::ScrollArea::both().show(ui, |ui| {
+    // No auto-shrink: the area must span the full panel even when the
+    // content is smaller, so the scrollbar sits at the panel edge.
+    egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
         // The page itself — selected whenever nothing else is, matching the
         // breadcrumb's "Page" root (Esc / empty-canvas click land here).
         if ui.selectable_label(selection.is_none(), "Page").clicked() {
