@@ -251,13 +251,20 @@ fn row(
     dim: bool,
     reveal: bool,
 ) {
-    let text = if dim {
-        egui::RichText::new(text).weak()
-    } else {
-        egui::RichText::new(text)
+    let selected = *selection == Some(id);
+    let text = match (dim, selected) {
+        // A *selected* row takes its ink from the selection plate
+        // (`visuals.selection.stroke`, which is what egui uses for a selected
+        // widget's text). `weak()` sets an explicit color and so wins over
+        // that — dim panel grey on the plate, i.e. grey on grey. Dim it
+        // *against the plate* instead, so "element is empty" still reads.
+        (true, true) => egui::RichText::new(text)
+            .color(ui.visuals().selection.stroke.color.gamma_multiply(0.75)),
+        (true, false) => egui::RichText::new(text).weak(),
+        (false, _) => egui::RichText::new(text),
     };
-    let resp = ui.selectable_label(*selection == Some(id), text);
-    if reveal && *selection == Some(id) {
+    let resp = ui.selectable_label(selected, text);
+    if reveal && selected {
         // Scroll to the row's *left edge* only: targeting the full rect
         // would also scroll horizontally to fit long labels, shoving the
         // whole tree sideways.

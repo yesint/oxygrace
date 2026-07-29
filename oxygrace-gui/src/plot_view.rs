@@ -783,23 +783,26 @@ fn draw_overlay(app: &App, ui: &egui::Ui, vm: ViewMap) {
     let Some(info) = &app.render_info else { return };
     // Clip slightly beyond the page image so the halo isn't cut off.
     let painter = ui.painter_at(vm.img_rect.expand(8.0));
+    // Overlay ink from the live theme's sheet (`[extras]`): drawn over the
+    // rendered page, so it answers to the paper, not to the panels.
+    let ex = crate::theme::extras(ui.ctx());
+    let (accent, halo) = (ex.accent, ex.halo);
 
     // Hover highlight (skip when same as selection).
     if let Some(id) = app.hover.filter(|h| app.selection != Some(*h)) {
-        highlight(&painter, info, id, vm, 0.55);
+        highlight(&painter, info, id, vm, 0.55, ex);
     }
     if let Some(id) = app.selection {
-        highlight(&painter, info, id, vm, 1.0);
+        highlight(&painter, info, id, vm, 1.0, ex);
     }
 
-    use crate::theme::{ACCENT, HALO};
     // Endpoint handles of a selected line annotation (drag affordances).
     if let Some(ElementId::LineObj(i)) = app.selection {
         if let Some((p1, p2)) = line_endpoints_screen(app, vm, i) {
             for p in [p1, p2] {
                 let hr = egui::Rect::from_center_size(p, egui::vec2(10.0, 10.0));
-                painter.rect_filled(hr, 1.0, HALO);
-                painter.rect_stroke(hr, 1.0, egui::Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
+                painter.rect_filled(hr, 1.0, halo);
+                painter.rect_stroke(hr, 1.0, egui::Stroke::new(2.0_f32, accent), egui::StrokeKind::Inside);
             }
         }
     }
@@ -808,8 +811,8 @@ fn draw_overlay(app: &App, ui: &egui::Ui, vm: ViewMap) {
         if let Some(r) = bounds_on_screen(info, sel, vm) {
             let r = r.expand(8.0);
             for p in [r.left_top(), r.right_top(), r.left_bottom(), r.right_bottom()] {
-                painter.circle_filled(p, 6.0, HALO);
-                painter.circle_stroke(p, 6.0, egui::Stroke::new(2.0, ACCENT));
+                painter.circle_filled(p, 6.0, halo);
+                painter.circle_stroke(p, 6.0, egui::Stroke::new(2.0_f32, accent));
             }
         }
     }
@@ -822,18 +825,18 @@ fn highlight(
     id: oxygrace::ElementId,
     vm: ViewMap,
     intensity: f32,
+    ex: crate::theme::Extras,
 ) {
-    use crate::theme::{ACCENT, HALO};
-    let halo = HALO.gamma_multiply(0.8 * intensity);
-    let accent = ACCENT.gamma_multiply(intensity);
+    let halo = ex.halo.gamma_multiply(0.8 * intensity);
+    let accent = ex.accent.gamma_multiply(intensity);
 
     // Sets: closed contours around *all* the ink at once (distance-field
     // isoline) — the outline follows the data's shape at a fixed distance
     // without tracing, and so masking, any individual point or segment.
     if let oxygrace::ElementId::Set { .. } = id {
         for lp in set_outline_loops(info, id, vm) {
-            painter.add(egui::Shape::closed_line(lp.clone(), egui::Stroke::new(3.5, halo)));
-            painter.add(egui::Shape::closed_line(lp, egui::Stroke::new(1.5, accent)));
+            painter.add(egui::Shape::closed_line(lp.clone(), egui::Stroke::new(3.5_f32, halo)));
+            painter.add(egui::Shape::closed_line(lp, egui::Stroke::new(1.5_f32, accent)));
         }
         return;
     }
@@ -853,9 +856,9 @@ fn highlight(
             let outline = |pts: Vec<egui::Pos2>| {
                 painter.add(egui::Shape::closed_line(
                     pts.clone(),
-                    egui::Stroke::new(3.5, halo),
+                    egui::Stroke::new(3.5_f32, halo),
                 ));
-                painter.add(egui::Shape::closed_line(pts, egui::Stroke::new(1.5, accent)));
+                painter.add(egui::Shape::closed_line(pts, egui::Stroke::new(1.5_f32, accent)));
             };
             match shape {
                 oxygrace::OverlayShape::Lines { pts, half_width } => {
@@ -875,8 +878,8 @@ fn highlight(
                 }
                 oxygrace::OverlayShape::Rect(b) => {
                     let r = bounds_to_screen(b, vm).expand(HIGHLIGHT_GAP);
-                    painter.rect_stroke(r, 1.0, egui::Stroke::new(3.5, halo), egui::StrokeKind::Outside);
-                    painter.rect_stroke(r, 1.0, egui::Stroke::new(1.5, accent), egui::StrokeKind::Outside);
+                    painter.rect_stroke(r, 1.0, egui::Stroke::new(3.5_f32, halo), egui::StrokeKind::Outside);
+                    painter.rect_stroke(r, 1.0, egui::Stroke::new(1.5_f32, accent), egui::StrokeKind::Outside);
                 }
             }
         }
@@ -886,8 +889,8 @@ fn highlight(
     // Box-like elements: bounds box (+ handles when selected, not hovered).
     let Some(r) = bounds_on_screen(info, id, vm) else { return };
     let r = r.expand(3.0);
-    painter.rect_stroke(r, 0.0, egui::Stroke::new(5.0, halo), egui::StrokeKind::Outside);
-    painter.rect_stroke(r, 0.0, egui::Stroke::new(2.5, accent), egui::StrokeKind::Outside);
+    painter.rect_stroke(r, 0.0, egui::Stroke::new(5.0_f32, halo), egui::StrokeKind::Outside);
+    painter.rect_stroke(r, 0.0, egui::Stroke::new(2.5_f32, accent), egui::StrokeKind::Outside);
     if intensity >= 1.0 {
         for p in [
             r.left_top(),
@@ -900,8 +903,8 @@ fn highlight(
             r.right_bottom(),
         ] {
             let hr = egui::Rect::from_center_size(p, egui::vec2(10.0, 10.0));
-            painter.rect_filled(hr, 1.0, HALO);
-            painter.rect_stroke(hr, 1.0, egui::Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
+            painter.rect_filled(hr, 1.0, ex.halo);
+            painter.rect_stroke(hr, 1.0, egui::Stroke::new(2.0_f32, ex.accent), egui::StrokeKind::Inside);
         }
     }
 }

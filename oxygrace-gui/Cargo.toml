@@ -13,6 +13,15 @@ oxygrace = { path = "../oxygrace" }
 eframe = { version = "0.34", features = ["persistence"] }
 egui = "0.34"
 egui_extras = "0.34"
+# The dark/light looks are data: `themes/*.toml` style sheets (a parent egui
+# preset plus overrides) applied by this app-independent crate of ours
+# (repo: github.com/yesint/egui-stylesheet). The sheets are shared with
+# molar_vis, so the two applications look like one family. To develop the two
+# together, temporarily add
+#   [patch.crates-io]
+#   egui-stylesheet = { path = "../../egui-stylesheet" }
+# to the workspace root and don't commit it.
+egui-stylesheet = "0.1"
 tiny-skia = "0.11"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }

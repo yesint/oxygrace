@@ -1,0 +1,70 @@
+# oxygrace — dark theme.
+#
+# A **style sheet**: egui's own `dark` preset plus the overrides below, applied by the
+# `egui-stylesheet` crate (see that crate's README for the format). `include_str!`d into the
+# binary, so editing it needs a rebuild; a user-supplied file would be parsed the same way.
+#
+# Ported from molar_vis, together with the reasoning in the comments — the two applications are
+# meant to look like one family.
+
+name = "oxygrace dark"
+parent = "dark"
+
+[palette]
+panel = "#141519"       # the left column (menu bar, toolbar, project tree) and the inspector
+window = "#1c1d22"      # floating windows: Settings, the unsaved-changes dialog
+field = "#2c2d34"       # text fields — the *brightest* surface, see below
+desk = "#34353b"        # the canvas the plot page sits on (see `[extras] canvas_bg`)
+text = "#eeeef2"
+text_dim = "#b8bac2"
+select = "#0054be"      # the selection plate: tree rows, menu and radio selections
+accent = "#006eff"      # ink of the canvas selection overlay (see `[extras] accent`)
+
+[visuals]
+panel_fill = "$panel"
+window_fill = "$window"
+# egui's dark preset sinks text fields *below* the panel (a "well"), which against a near-black
+# panel leaves a property field indistinguishable from its background. Here they are the
+# brightest surface instead — the same relationship the light sheet has (a 235 field over a 198
+# window), so a field reads as a field in both themes.
+extreme_bg_color = "$field"
+
+# The selection plate, and the ink on it: egui takes a **selected** widget's text color from
+# `selection.stroke`, so that is where the ink goes — it is not a second shade of the plate.
+selection.bg_fill = "$select"
+selection.stroke = { width = 1.0, color = "#ffffff" }
+
+hyperlink_color = "$accent"
+
+# Shadows stay **dark** on the dark theme too — the one place this sheet parts from molar_vis's,
+# which uses a white bloom because its windows float over a dark 3-D viewport. Ours are centered
+# over the *plot page*: white paper, where a white bloom is invisible. Deeper than egui's ~10%
+# default so it also registers against the desk the page sits on.
+window_shadow = { offset = [8, 14], blur = 30, spread = 2, color = "#0000006e" }
+popup_shadow = { offset = [4, 8], blur = 20, spread = 1, color = "#00000059" }
+
+[text]
+normal = "$text"
+dim = "$text_dim"
+
+[metrics]
+heading = 24.0
+body = 17.0
+button = 17.0
+monospace = 15.0
+small = 13.5
+item_spacing = [8.0, 7.0]
+button_padding = [8.0, 4.0]
+
+[extras]
+# Colors egui has no field for — it models only `warn_fg_color` and `error_fg_color`, so anything
+# else has to be named here and read back with `sheet.extra(..)`.
+#
+# The two overlay colors are drawn over the **rendered plot**, not over the UI, so they answer to
+# the paper — a white page carrying saturated Grace colors — and are therefore identical in both
+# sheets: a blue that reads on white, and the halo laid under it so it survives dark ink and
+# colored fills alike.
+accent = "$accent"
+halo = "#ffffff"
+# The desk the page sits on *is* a UI surface, so it differs per theme.
+canvas_bg = "$desk"

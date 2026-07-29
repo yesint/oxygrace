@@ -111,7 +111,9 @@ oxygrace-gui/src/    egui app: app.rs (state + panels), render.rs (dirty →
                      texture), plot_view.rs (ViewMap fit/blit, hit-test,
                      drags), inspector/ (property pages + rows), tree.rs,
                      file.rs (all dialog calls; cfg-split native/web),
-                     theme.rs, args.rs, edit.rs, undo.rs
+                     theme.rs (style-sheet glue), args.rs, edit.rs, undo.rs
+oxygrace-gui/themes/ dark.toml / light.toml — the two style sheets
+                     (egui-stylesheet format), embedded via include_str!
 examples/            *.agr test corpus (from QtGrace6), at the workspace root
 ```
 
@@ -349,9 +351,9 @@ painted on top of the texture (no re-render), project tree in the left
 panel sharing the `ElementId` selection currency (hidden items grayed),
 `tree::describe` for status/inspector text, `OXYGRACE_GUI_SELECT=set:0:1`
 debug hook for screenshot tests, corpus self-consistency test
-(every visible graph/set records bounds). High-contrast theme
-(`theme.rs`: zoom 1.25, bright text, halo-outlined selection overlay) —
-hardcoded for now, to become configurable.
+(every visible graph/set records bounds). High-contrast theme with a
+halo-outlined selection overlay (`theme.rs`; the palette later moved into
+style sheets — see the GUI theming section).
 
 **GUI G3 (done):** the editor MVP. `edit.rs` command layer (widgets queue
 `Edit { label, coalesce, apply: Box<dyn FnOnce(&mut Project)> }`; the app
@@ -403,7 +405,7 @@ canvas AND viewports/view-anchored objects rescale with the page extents —
 the postprocess_version stretch — so the plot fills the window; original
 geometry restored on toggle-off, and Save writes the un-stretched
 geometry — free aspect is a view mode, not an edit); dark/light modes (View →
-Mode, `theme::apply(ctx, Mode)`); status bar updates on hover (element +
+Mode, `theme::apply(ctx, Pref)`); status bar updates on hover (element +
 overlap count); menus switch on hover once one is open; frame edges are
 recorded as axis ink (`record_polyline_view`) so axes are selectable when
 bars are off (au.agr); highlight polylines dedup consecutive points (egui
@@ -419,7 +421,8 @@ half-radius cells (per-point size/color and Char symbols exempt). 1M-point
 line: ~1.5 s → 25–50 ms render, hover hit-test µs; 1M symbols: 8.2 s →
 0.3 s, records 2M → 53k. Theme: View → Mode has System/Dark/Light —
 egui's `system_theme()` gives the OS dark/light preference only (no system
-palette colors exist in egui).
+palette colors exist in egui), so System picks between *our* two sheets
+(see GUI theming).
 **GUI G5 (done):** wasm web build. `main.rs` cfg-split (native
 eframe::run_native vs eframe::WebRunner onto `oxygrace_canvas` in
 index.html); `file.rs` cfg-split — web opens via `rfd::AsyncFileDialog`
@@ -489,6 +492,45 @@ shrink when a short page is shown. Settings persist via eframe storage
 (`persistence`
 feature — also persists egui memory: panel sizes, collapse states);
 debug hook `OXYGRACE_GUI_LAYOUT=stacked|right`.
+
+**GUI theming — style sheets (done):** the dark and light looks are *data*:
+`oxygrace-gui/themes/dark.toml` and `light.toml`, each an egui preset
+(`parent = "dark"|"light"`) plus only the fields it changes, applied by our
+own app-independent **`egui-stylesheet`** crate (crates.io; repo
+`github.com/yesint/egui-stylesheet`; a sheet is a `[palette]` of named colors,
+`[visuals]` keyed by verbatim `egui::Visuals` field paths, `[text]` normal/dim,
+`[metrics]` for the `Style` bits outside `Visuals`, and `[extras]` for colors
+egui has no field for). The sheets are **ported from molar_vis**
+(`crates/molar_vis_core/themes/`) — dark is a near-black panel ramp with text
+fields as the *brightest* surface and a white-bloom shadow; light is the
+**Purogrey** KDE scheme's own color groups (grey panels, black ink, dark
+selection plate), because egui's light preset is far too low-contrast for a
+dense property grid. Keep the two applications' sheets in sync when either is
+retuned; sheet comments carry the reasoning (notably: a resting
+`widgets.inactive.bg_stroke.width > 0` makes frameless buttons resize on hover
+— pinned by `theme::tests::hover_does_not_resize_widgets`).
+
+`theme.rs` is only glue: `Pref` (System/Dark/Light) → `apply` configures
+*both* egui theme styles from the sheets and `Context::set_theme` picks the
+live one, so System follows the host (`prefers-color-scheme` on web) with no
+polling and no re-apply. The old hardcoded `Visuals` tweaks, `Mode`/`resolve`
+and the `ACCENT`/`HALO` consts are gone: overlay colors now come from
+`[extras]` via `theme::extras(ctx)` / `accent(ctx)` / `canvas_bg(ctx)`, keyed
+off the live theme (`accent`/`halo` are identical in both sheets — they are
+drawn over the plot's white paper, not over the UI; `canvas_bg`, the desk
+around the page, is not). Type sizes come from `[metrics]` (body 17), so the
+former `set_zoom_factor(1.25)` is gone — `App::new` resets the zoom to 1.0
+because egui *persists* `zoom_factor` and a stale 1.25 would stack on top.
+Sheets are parsed once (`LazyLock`) and validated by
+`theme::tests::built_in_sheets_apply` — they ship inside the binary, so a
+typo'd hex or renamed egui field must fail in CI, not at startup.
+
+Gotcha the Purogrey plate exposed: `RichText::weak()` sets an *explicit*
+color, which beats the ink egui gives a **selected** widget (from
+`visuals.selection.stroke`) — so a dimmed *and* selected tree row (an empty
+Title, say) painted dim panel grey on the dark selection plate. `tree::row`
+now dims against the plate instead (`selection.stroke.color` at 0.75) when
+the row is both.
 
 **Wayland IME workaround** (`defuse_broken_ime` at the top of `App::ui`,
 Linux-gated): recent Wayland compositors make winit stream `Ime(Disabled)` +

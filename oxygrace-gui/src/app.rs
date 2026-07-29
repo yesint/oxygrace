@@ -75,8 +75,8 @@ pub struct App {
     pub rotate_armed: Option<ElementId>,
     /// Theme preference (View → Mode); System follows the OS dark/light.
     pub theme_pref: crate::theme::Pref,
-    /// Currently applied concrete mode (resolved from the preference).
-    pub theme: crate::theme::Mode,
+    /// Preference the styles were last configured for (re-apply on change).
+    theme_applied: crate::theme::Pref,
     /// Persisted user preferences (Edit → Settings…).
     pub settings: Settings,
     /// The Settings window is showing.
@@ -117,11 +117,25 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::icons::install(&cc.egui_ctx);
-        crate::theme::apply(&cc.egui_ctx, crate::theme::Mode::Dark);
+        // Debug/CI hook: force a mode. Read before the first `theme::apply`, so
+        // the styles are configured once, with the final preference.
+        let theme_pref = match std::env::var("OXYGRACE_GUI_THEME").as_deref() {
+            Ok("light") => crate::theme::Pref::Light,
+            Ok("dark") => crate::theme::Pref::Dark,
+            _ => crate::theme::Pref::System,
+        };
+        crate::theme::apply(&cc.egui_ctx, theme_pref);
+        // The sheets' `[metrics]` carry the type sizes, so the UI starts
+        // unzoomed. Explicit because egui persists `zoom_factor` as part of
+        // its options, and builds up to G5 enlarged the UI by setting it to
+        // 1.25 — that stale value would now stack on top of the sheet sizes.
+        // (Ctrl+±/Ctrl+0 still zoom from here.)
+        cc.egui_ctx.set_zoom_factor(1.0);
         // Screenshot/CI mode: animations are wall-clock based and headless
-        // frames run in milliseconds, so freeze them for determinism.
+        // frames run in milliseconds, so freeze them for determinism. Both
+        // styles, so a theme switch can't thaw them.
         if std::env::var("OXYGRACE_GUI_SHOT").is_ok() {
-            cc.egui_ctx.global_style_mut(|s| {
+            cc.egui_ctx.all_styles_mut(|s| {
                 s.animation_time = 0.0;
                 s.scroll_animation = egui::style::ScrollAnimation::none();
             });
@@ -145,8 +159,8 @@ impl App {
             tool: Tool::Select,
             pan: None,
             rotate_armed: None,
-            theme_pref: crate::theme::Pref::System,
-            theme: crate::theme::Mode::Dark,
+            theme_pref,
+            theme_applied: theme_pref,
             settings: cc
                 .storage
                 .and_then(|s| eframe::get_value(s, SETTINGS_KEY))
@@ -201,12 +215,6 @@ impl App {
         // Debug/CI hook: pre-select an element (e.g. "set:0:1", "legend:0").
         if let Ok(spec) = std::env::var("OXYGRACE_GUI_SELECT") {
             app.selection = parse_element_spec(&spec);
-        }
-        // Debug/CI hook: force a mode.
-        match std::env::var("OXYGRACE_GUI_THEME").as_deref() {
-            Ok("light") => app.theme_pref = crate::theme::Pref::Light,
-            Ok("dark") => app.theme_pref = crate::theme::Pref::Dark,
-            _ => {}
         }
         // Debug/CI hook: force a panel layout ("stacked" = below the tree).
         if let Ok(v) = std::env::var("OXYGRACE_GUI_LAYOUT") {
@@ -785,12 +793,12 @@ impl eframe::App for App {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Apply the theme when the preference or the OS mode changes
-        // (App::new already applied the initial Dark).
-        let resolved = crate::theme::resolve(ctx, self.theme_pref);
-        if resolved != self.theme {
-            self.theme = resolved;
-            crate::theme::apply(ctx, resolved);
+        // Re-configure the styles when the preference changes (App::new
+        // applied the initial one). A *System* mode change needs nothing:
+        // both styles are always configured and egui picks by preference.
+        if self.theme_pref != self.theme_applied {
+            self.theme_applied = self.theme_pref;
+            crate::theme::apply(ctx, self.theme_pref);
         }
         // Files picked by the async (web) dialog arrive via the inbox.
         #[cfg(target_arch = "wasm32")]
@@ -908,7 +916,7 @@ impl eframe::App for App {
             ui.label(&self.status);
         });
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(crate::theme::canvas_bg(self.theme)))
+            .frame(egui::Frame::new().fill(crate::theme::canvas_bg(ui.ctx())))
             .show_inside(ui, |ui| {
                 crate::plot_view::show(self, ui);
             });

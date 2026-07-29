@@ -261,15 +261,11 @@ fn color_impl(
     row(ui, label, |ui| {
         let rgba = resolve(project, v);
         // The button is the current color itself, with a contrast arrow.
-        let arrow = if luminance(rgba) > 0.5 {
-            egui::Color32::BLACK
-        } else {
-            egui::Color32::WHITE
-        };
+        let arrow = egui_stylesheet::contrasting_text(rgba);
         let resp = ui.add(
             egui::Button::new(egui::RichText::new("⏷").color(arrow).size(11.0))
                 .fill(rgba)
-                .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(140)))
+                .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_gray(140)))
                 .min_size(egui::vec2(48.0, 18.0)),
         );
         let mut picked = None;
@@ -293,9 +289,9 @@ fn color_impl(
                         let c = resolve(project, i);
                         let current = i == v;
                         let stroke = if current {
-                            egui::Stroke::new(2.0, crate::theme::ACCENT)
+                            egui::Stroke::new(2.0_f32, crate::theme::accent(ui.ctx()))
                         } else {
-                            egui::Stroke::new(1.0, egui::Color32::from_gray(120))
+                            egui::Stroke::new(1.0_f32, egui::Color32::from_gray(120))
                         };
                         let b = ui
                             .add(
@@ -338,10 +334,6 @@ fn color_impl(
 fn resolve(project: &Project, index: i32) -> egui::Color32 {
     let c = oxygrace::color::resolve(project, index);
     egui::Color32::from_rgb(c.r, c.g, c.b)
-}
-
-fn luminance(c: egui::Color32) -> f32 {
-    (0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32) / 255.0
 }
 
 fn color_name(project: &Project, index: i32) -> String {
@@ -400,7 +392,7 @@ fn pattern_sample(ui: &mut egui::Ui, idx: i32, size: egui::Vec2, selected: bool)
         // "None": an empty sample with a red slash.
         p.line_segment(
             [rect.left_bottom(), rect.right_top()],
-            egui::Stroke::new(1.5, egui::Color32::from_rgb(200, 60, 60)),
+            egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(200, 60, 60)),
         );
     } else if let Some(bits) = oxygrace::patterns::PATTERN_BITS.get(idx as usize) {
         let px = (size.y / 16.0).max(1.0);
@@ -422,9 +414,9 @@ fn pattern_sample(ui: &mut egui::Ui, idx: i32, size: egui::Vec2, selected: bool)
         }
     }
     let stroke = if selected {
-        egui::Stroke::new(2.0, crate::theme::ACCENT)
+        egui::Stroke::new(2.0_f32, crate::theme::accent(ui.ctx()))
     } else {
-        egui::Stroke::new(1.0, egui::Color32::from_gray(120))
+        egui::Stroke::new(1.0_f32, egui::Color32::from_gray(120))
     };
     p.rect_stroke(rect, 2.0, stroke, egui::StrokeKind::Inside);
     resp
@@ -514,7 +506,7 @@ fn dash_preview(ui: &mut egui::Ui, style: i32) {
         return; // none: draw nothing
     }
     let y = rect.center().y;
-    let stroke = egui::Stroke::new(2.0, ui.visuals().text_color());
+    let stroke = egui::Stroke::new(2.0_f32, ui.visuals().text_color());
     let dashes = oxygrace::render::canvas::DASH_PATTERNS
         .get(style.max(0) as usize)
         .copied()
