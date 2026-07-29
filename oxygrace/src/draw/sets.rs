@@ -279,11 +279,9 @@ fn draw_set_errbars(
             std::mem::swap(&mut dxp, &mut dxm);
             std::mem::swap(&mut dyp, &mut dym);
         }
-        2 => {
-            if dxm.is_none() && dym.is_none() {
-                dxm = dxp;
-                dym = dyp;
-            }
+        2 if dxm.is_none() && dym.is_none() => {
+            dxm = dxp;
+            dym = dyp;
         }
         _ => {}
     }

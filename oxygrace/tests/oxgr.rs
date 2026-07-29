@@ -71,9 +71,7 @@ fn sample_document_parses() {
 /// byte-identical (the strongest equality we have).
 #[test]
 fn round_trip_preserves_render() {
-    let mut p = Project::default();
-    p.page_width = 500;
-    p.page_height = 400;
+    let mut p = Project { page_width: 500, page_height: 400, ..Default::default() };
     p.color_overrides.push((5, (10, 200, 90)));
     let g = p.graph_mut(0);
     g.world = World { xmin: 0.0, xmax: 6.5, ymin: -1.5, ymax: 1.5 };

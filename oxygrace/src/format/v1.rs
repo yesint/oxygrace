@@ -1443,11 +1443,13 @@ impl Document {
 
     /// Materialize a project from the document.
     pub fn into_project(self) -> Result<Project, OxgrError> {
-        let mut p = Project::default();
-        p.page_width = self.page.width;
-        p.page_height = self.page.height;
-        p.dpi = self.page.dpi;
-        p.defaults = self.defaults.to_model();
+        let mut p = Project {
+            page_width: self.page.width,
+            page_height: self.page.height,
+            dpi: self.page.dpi,
+            defaults: self.defaults.to_model(),
+            ..Default::default()
+        };
         if let Some(fonts) = &self.fonts {
             for (slot, &face) in p.font_map.iter_mut().zip(fonts) {
                 *slot = face;
@@ -1525,14 +1527,16 @@ impl GraphDoc {
     }
 
     fn into_model(self, defaults: &Defaults) -> Graph {
-        let mut g = Graph::default();
-        g.graph_type = self.kind;
-        g.hidden = self.hidden;
-        g.world = World {
-            xmin: self.world.xmin,
-            xmax: self.world.xmax,
-            ymin: self.world.ymin,
-            ymax: self.world.ymax,
+        let mut g = Graph {
+            graph_type: self.kind,
+            hidden: self.hidden,
+            world: World {
+                xmin: self.world.xmin,
+                xmax: self.world.xmax,
+                ymin: self.world.ymin,
+                ymax: self.world.ymax,
+            },
+            ..Default::default()
         };
         g.view.xmin = self.view.xmin;
         g.view.xmax = self.view.xmax;
